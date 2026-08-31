@@ -44,14 +44,20 @@ export default function Home() {
     }
   };
 
-  // Start an investigation for an incident
+  // Set active investigation directly
+  const handleInvestigationStarted = (inv: Investigation) => {
+    setActiveInvestigationId(inv.investigation_id);
+    setInvestigation(inv);
+    setActiveTab('live');
+    setErrorMessage(null);
+  };
+
+  // Start an investigation for an existing incident
   const handleStartInvestigation = async (incidentId: string) => {
     setErrorMessage(null);
     try {
       const inv = await startInvestigation(incidentId);
-      setActiveInvestigationId(inv.investigation_id);
-      setInvestigation(inv);
-      setActiveTab('live');
+      handleInvestigationStarted(inv);
     } catch (err: any) {
       console.error('Failed to start investigation', err);
       setErrorMessage(err.message || 'Failed to initiate autonomous investigation.');
@@ -135,6 +141,7 @@ export default function Home() {
             loadingIncidents={loadingIncidents}
             onRefreshIncidents={loadIncidents}
             onStartInvestigation={handleStartInvestigation}
+            onInvestigationStarted={handleInvestigationStarted}
           />
         ) : (
           <div className="space-y-2">

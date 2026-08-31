@@ -1,15 +1,16 @@
 'use client';
 
 import React, { useState } from 'react';
-import { IncidentSummary } from '../types';
+import { IncidentSummary, Investigation } from '../types';
 import { generateIncident, startInvestigation, startDemoInvestigation } from '../lib/api';
-import { Play, Sparkles, RefreshCw, Activity, Server, Clock, AlertCircle, ShieldAlert, Cpu } from 'lucide-react';
+import { Play, Sparkles, RefreshCw, Activity, Server, Clock, AlertCircle, ShieldAlert, Cpu, Loader2 } from 'lucide-react';
 
 interface Screen1LauncherProps {
   incidents: IncidentSummary[];
   loadingIncidents: boolean;
   onRefreshIncidents: () => void;
-  onStartInvestigation: (incidentId: string) => void;
+  onStartInvestigation: (incidentId: string) => Promise<void>;
+  onInvestigationStarted: (investigation: Investigation) => void;
 }
 
 export function Screen1Launcher({
@@ -17,6 +18,7 @@ export function Screen1Launcher({
   loadingIncidents,
   onRefreshIncidents,
   onStartInvestigation,
+  onInvestigationStarted,
 }: Screen1LauncherProps) {
   const [selectedType, setSelectedType] = useState<string>('random');
   const [seedInput, setSeedInput] = useState<string>('');
@@ -32,10 +34,11 @@ export function Screen1Launcher({
       const seedVal = seedInput.trim() ? parseInt(seedInput.trim(), 10) : undefined;
       const newInc = await generateIncident(selectedType, seedVal);
       onRefreshIncidents();
-      // Directly kick off investigation on generated incident
-      onStartInvestigation(newInc.incident_id);
+      const inv = await startInvestigation(newInc.incident_id);
+      onInvestigationStarted(inv);
     } catch (err: any) {
       setError(err.message || 'Failed to generate incident');
+    } finally {
       setGenerating(false);
     }
   };
@@ -45,9 +48,10 @@ export function Screen1Launcher({
     setError(null);
     try {
       const inv = await startDemoInvestigation();
-      onStartInvestigation(inv.incident_id);
+      onInvestigationStarted(inv);
     } catch (err: any) {
       setError(err.message || 'Failed to start demo incident');
+    } finally {
       setDemoStarting(false);
     }
   };
@@ -74,154 +78,171 @@ export function Screen1Launcher({
             <Sparkles className="w-5 h-5 text-cyan-400" />
             <h2 className="text-base font-semibold text-slate-100">Deterministic Evaluated Demo Scenario</h2>
           </div>
-          <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
-            Instantly run a verified live investigation (<span className="font-mono text-cyan-300">bad_deployment_db_exhaustion, seed=1</span>). Watch the agent scope telemetry, compute candidate scores, run live Gemini self-critique with deterministic slope checks, and emit an evidence-grounded RCA.
+          <p className="text-xs text-slate-400 font-mono max-w-2xl leading-relaxed">
+            Instantly boots a full microservice incident with telemetry, unindexed query regressions, and masked distractors. Evaluated through 8 autonomous state machine steps.
           </p>
         </div>
+
         <button
           onClick={handleRunDemo}
-          disabled={demoStarting || generating}
-          className="w-full md:w-auto px-6 py-3.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-semibold text-sm shadow-lg shadow-cyan-500/20 hover:shadow-cyan-500/30 transition-all flex items-center justify-center gap-2.5 disabled:opacity-50 shrink-0 cursor-pointer"
+          disabled={demoStarting}
+          className="w-full md:w-auto px-6 py-3.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-bold text-sm font-mono shadow-lg shadow-cyan-950/50 flex items-center justify-center gap-2.5 transition-all disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer shrink-0"
         >
           {demoStarting ? (
             <>
-              <RefreshCw className="w-4 h-4 animate-spin" />
-              <span>Launching Demo...</span>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span>Launching Investigation...</span>
             </>
           ) : (
             <>
-              <Play className="w-4 h-4 fill-current" />
+              <Play className="w-4 h-4 fill-slate-950" />
               <span>Run Demo Incident</span>
             </>
           )}
         </button>
       </div>
 
-      {/* Generator Form & Active Incidents Grid */}
+      {demoStarting && (
+        <div className="p-3.5 rounded-xl bg-cyan-950/40 border border-cyan-800/50 text-cyan-300 text-xs font-mono flex items-center gap-2.5 animate-pulse">
+          <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+          <span>Warming up cloud backend & generating synthetic telemetry (takes ~15-25s on cloud instances)...</span>
+        </div>
+      )}
+
+      {error && (
+        <div className="p-4 rounded-xl bg-rose-950/80 border border-rose-800 text-rose-200 text-xs font-mono flex items-center gap-3">
+          <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {/* Generator & Manual Incident Launcher Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Left Column: Generator Form */}
-        <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-6">
-          <div className="flex items-center gap-2.5 border-b border-slate-800 pb-4">
-            <Server className="w-5 h-5 text-indigo-400" />
-            <h2 className="text-base font-semibold text-slate-100">Launch New Incident</h2>
+        {/* Synthetic Generator Card */}
+        <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-6 shadow-xl">
+          <div className="space-y-1">
+            <h2 className="text-sm font-semibold text-slate-200 uppercase tracking-wider font-mono">
+              Generate New Incident
+            </h2>
+            <p className="text-xs text-slate-400 font-mono">
+              Inject synthetic failures into simulated e-commerce microservices.
+            </p>
           </div>
 
           <form onSubmit={handleGenerate} className="space-y-4">
             <div className="space-y-2">
-              <label className="text-xs font-mono text-slate-400 block">INCIDENT ARCHETYPE</label>
+              <label className="text-xs font-mono text-slate-300">Failure Archetype</label>
               <select
                 value={selectedType}
                 onChange={(e) => setSelectedType(e.target.value)}
-                className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-sm font-mono text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors"
+                className="w-full px-3 py-2 text-xs font-mono bg-slate-950 border border-slate-800 rounded-xl text-slate-200 focus:outline-none focus:border-cyan-600"
               >
-                <option value="random">🎲 Random Archetype (Balanced)</option>
-                <option value="bad_deployment_db_exhaustion">Bad Deployment → DB Pool Exhaustion</option>
-                <option value="dependency_failure_cascade">Payment Dependency Failure Cascade</option>
-                <option value="memory_leak_masked_deployment">Slow Memory Leak w/ Coincidental Deploy</option>
+                <option value="random">🎲 Random Complex Failure</option>
+                <option value="bad_deployment_db_exhaustion">🚀 Bad Deployment + DB Saturation</option>
+                <option value="dependency_failure_cascade">⚡ Downstream Dependency Cascade</option>
+                <option value="memory_leak_red_herring_deployment">🧠 Memory Leak + Red-Herring Deployment</option>
               </select>
             </div>
 
             <div className="space-y-2">
-              <label className="text-xs font-mono text-slate-400 block">SYNTHETIC RANDOM SEED (OPTIONAL)</label>
+              <label className="text-xs font-mono text-slate-300">Deterministic Seed (Optional)</label>
               <input
                 type="number"
-                placeholder="e.g. 42 (blank for random)"
+                placeholder="e.g. 42 (leave blank for random)"
                 value={seedInput}
                 onChange={(e) => setSeedInput(e.target.value)}
-                className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-sm font-mono text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500 transition-colors"
+                className="w-full px-3 py-2 text-xs font-mono bg-slate-950 border border-slate-800 rounded-xl text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-600"
               />
             </div>
 
-            {error && (
-              <div className="p-3 rounded-lg bg-rose-950/40 border border-rose-800/80 text-rose-300 text-xs flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{error}</span>
-              </div>
-            )}
-
             <button
               type="submit"
-              disabled={generating || demoStarting}
-              className="w-full py-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 font-medium text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
+              disabled={generating}
+              className="w-full py-2.5 text-xs font-mono font-bold bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 rounded-xl transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
             >
               {generating ? (
                 <>
-                  <RefreshCw className="w-4 h-4 animate-spin text-cyan-400" />
-                  <span>Synthesizing Telemetry...</span>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Generating Telemetry...</span>
                 </>
               ) : (
                 <>
-                  <Sparkles className="w-4 h-4 text-cyan-400" />
-                  <span>Generate & Investigate</span>
+                  <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Synthesize & Investigate</span>
                 </>
               )}
             </button>
           </form>
         </div>
 
-        {/* Right Column: Previously Generated Incidents */}
-        <div className="lg:col-span-2 p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-            <div className="flex items-center gap-2.5">
-              <Clock className="w-5 h-5 text-cyan-400" />
-              <h2 className="text-base font-semibold text-slate-100">Telemetry Incident History</h2>
+        {/* Existing Incidents List */}
+        <div className="lg:col-span-2 p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-6 shadow-xl">
+          <div className="flex items-center justify-between">
+            <div className="space-y-1">
+              <h2 className="text-sm font-semibold text-slate-200 uppercase tracking-wider font-mono">
+                Telemetry Store Incidents ({incidents.length})
+              </h2>
+              <p className="text-xs text-slate-400 font-mono">
+                Select an incident to launch real-time multi-hypothesis root-cause analysis.
+              </p>
             </div>
             <button
               onClick={onRefreshIncidents}
               disabled={loadingIncidents}
-              className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors"
+              className="p-2 text-slate-400 hover:text-slate-200 bg-slate-950 border border-slate-800 rounded-xl transition-colors cursor-pointer"
               title="Refresh incidents"
             >
               <RefreshCw className={`w-4 h-4 ${loadingIncidents ? 'animate-spin' : ''}`} />
             </button>
           </div>
 
-          <div className="overflow-x-auto">
-            {incidents.length === 0 ? (
-              <div className="py-12 text-center text-slate-500 text-sm">
-                No incidents ingested yet. Click &quot;Run Demo Incident&quot; or &quot;Generate & Investigate&quot; above to create one.
+          <div className="space-y-3 max-h-[380px] overflow-y-auto pr-1">
+            {loadingIncidents && incidents.length === 0 ? (
+              <div className="p-8 text-center text-xs font-mono text-slate-500">
+                <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2 text-cyan-500" />
+                Loading incident history from telemetry database...
+              </div>
+            ) : incidents.length === 0 ? (
+              <div className="p-8 text-center text-xs font-mono text-slate-500 border border-dashed border-slate-800 rounded-xl">
+                No incidents in database yet. Click "Run Demo Incident" or "Generate New Incident" above to begin.
               </div>
             ) : (
-              <div className="space-y-3">
-                {incidents.map((inc) => (
-                  <div
-                    key={inc.incident_id}
-                    className="p-4 rounded-xl bg-slate-950/60 border border-slate-800/80 hover:border-slate-700 transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
-                  >
-                    <div className="space-y-1.5">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-xs font-mono font-bold text-slate-200">
-                          {inc.incident_type}
-                        </span>
-                        <span className={`px-2 py-0.5 text-[10px] font-mono font-bold rounded uppercase ${
-                          inc.severity === 'sev1' ? 'bg-rose-950 text-rose-300 border border-rose-800' : 'bg-amber-950 text-amber-300 border border-amber-800'
-                        }`}>
-                          {inc.severity}
-                        </span>
-                        <span className="text-xs font-mono text-slate-500">
-                          {new Date(inc.started_at).toLocaleTimeString()} ({inc.duration_minutes}m window)
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="text-[11px] font-mono text-slate-400">Affected:</span>
-                        {inc.affected_services.map((svc) => (
-                          <span key={svc} className="px-2 py-0.5 text-[11px] font-mono bg-slate-900 border border-slate-800 text-slate-300 rounded">
-                            {svc}
-                          </span>
-                        ))}
-                      </div>
+              incidents.map((inc) => (
+                <div
+                  key={inc.incident_id}
+                  className="p-4 rounded-xl bg-slate-950 border border-slate-800/80 hover:border-cyan-800/80 transition-all flex items-center justify-between gap-4 group"
+                >
+                  <div className="space-y-1.5 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-mono text-xs font-bold text-slate-200 truncate">
+                        {inc.incident_type.replace(/_/g, ' ').toUpperCase()}
+                      </span>
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase bg-rose-950/80 text-rose-300 border border-rose-900">
+                        {inc.severity}
+                      </span>
                     </div>
-
-                    <button
-                      onClick={() => onStartInvestigation(inc.incident_id)}
-                      className="px-4 py-2 text-xs font-semibold bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-700/80 text-cyan-300 rounded-xl transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer"
-                    >
-                      <Play className="w-3.5 h-3.5 fill-current" />
-                      <span>Investigate</span>
-                    </button>
+                    <div className="flex items-center gap-3 text-[11px] font-mono text-slate-500 flex-wrap">
+                      <span className="flex items-center gap-1">
+                        <Server className="w-3 h-3 text-cyan-400" /> {inc.affected_services?.join(', ') || 'cluster'}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-slate-400" /> {new Date(inc.started_at).toLocaleTimeString()}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Activity className="w-3 h-3 text-emerald-400" /> {inc.duration_minutes}m duration
+                      </span>
+                    </div>
                   </div>
-                ))}
-              </div>
+
+                  <button
+                    onClick={() => onStartInvestigation(inc.incident_id)}
+                    className="px-3.5 py-1.5 text-xs font-mono font-bold bg-cyan-950 text-cyan-300 border border-cyan-800 hover:bg-cyan-900 rounded-lg transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer shadow-sm"
+                  >
+                    <Play className="w-3 h-3 fill-cyan-300" />
+                    <span>Investigate</span>
+                  </button>
+                </div>
+              ))
             )}
           </div>
         </div>
