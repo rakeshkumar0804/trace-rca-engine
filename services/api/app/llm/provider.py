@@ -271,15 +271,17 @@ class GeminiProvider(LLMProvider):
 
         for attempt in range(max_retries + 1):
             try:
-                response = self._client.models.generate_content(
+                gen_config = types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    response_mime_type="application/json",
+                    response_schema=response_schema,
+                    temperature=0.1,
+                )
+                response = await asyncio.to_thread(
+                    self._client.models.generate_content,
                     model=self.model_name,
                     contents=current_prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_instruction,
-                        response_mime_type="application/json",
-                        response_schema=response_schema,
-                        temperature=0.1,
-                    ),
+                    config=gen_config,
                 )
 
                 response_text = response.text
