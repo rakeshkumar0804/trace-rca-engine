@@ -81,19 +81,26 @@ async def search_similar(
     target_uuids = [c[0] for c in top_candidates if isinstance(c[0], UUID)]
     target_shas = [str(c[0]) for c in top_candidates if isinstance(c[0], str)]
 
-    # Fetch corresponding normalized events
-    norm_stmt = select(NormalizedEventORM).where(
-        NormalizedEventORM.incident_id == incident_id,
-    )
-    norm_rows = (await session.execute(norm_stmt)).scalars().all()
-    
-    # Index normalized events by ID and by commit_sha relationship/attribute
-    norm_by_id: dict[UUID, NormalizedEventORM] = {r.id: r for r in norm_rows}
+    # Fetch only the matching normalized events (zero full-table scans)
+    norm_by_id: dict[UUID, NormalizedEventORM] = {}
+    if target_uuids:
+        norm_stmt = select(NormalizedEventORM).where(
+            NormalizedEventORM.incident_id == incident_id,
+            NormalizedEventORM.id.in_(target_uuids),
+        )
+        for r in (await session.execute(norm_stmt)).scalars().all():
+            norm_by_id[r.id] = r
+
     norm_by_sha: dict[str, NormalizedEventORM] = {}
-    for r in norm_rows:
-        sha = r.attributes.get("commit_sha") if isinstance(r.attributes, dict) else None
-        if sha:
-            norm_by_sha[str(sha)] = r
+    if target_shas:
+        sha_stmt = select(NormalizedEventORM).where(
+            NormalizedEventORM.incident_id == incident_id,
+            NormalizedEventORM.event_type == "git_commit",
+        )
+        for r in (await session.execute(sha_stmt)).scalars().all():
+            sha = r.attributes.get("commit_sha") if isinstance(r.attributes, dict) else None
+            if sha and str(sha) in target_shas:
+                norm_by_sha[str(sha)] = r
 
     results: list[NormalizedEvent] = []
     seen_ids: set[UUID] = set()
