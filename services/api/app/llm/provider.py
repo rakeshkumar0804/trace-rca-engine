@@ -139,30 +139,31 @@ class MockLLMProvider(LLMProvider):
         if issubclass(response_schema, InterpretationResponse):
             import re
             uuid_regex = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-            found_uuids = [UUID(m) for m in re.findall(uuid_regex, prompt)]
 
-            # Extract all Question lines
-            q_lines = [line.replace("Question:", "").strip() for line in prompt.splitlines() if line.startswith("Question:")]
-            if not q_lines:
-                q_lines = ["General inquiry"]
-
+            # Split prompt into question sections
+            sections = prompt.split("### Question ")
             verdicts: list[EvidenceVerdict] = []
-            for q_text in q_lines:
+
+            for sec in sections[1:]:
+                lines = sec.strip().splitlines()
+                q_text = lines[0].split(":", 1)[-1].strip() if lines else "General inquiry"
+                sec_uuids = [UUID(m) for m in re.findall(uuid_regex, sec)]
                 q_lower = q_text.lower()
+
                 if "payment" in q_lower:
                     verdicts.append(
                         EvidenceVerdict(
                             question=q_text,
-                            evidence_ids_cited=found_uuids[:2],
+                            evidence_ids_cited=sec_uuids[:2],
                             verdict="contradicts",
                             reasoning="Retrieved payment telemetry shows 0 error logs and normal baseline latency (85ms), contradicting payment database failure.",
                         )
                     )
-                elif "traffic" in q_lower or "memory" in q_lower:
+                elif "traffic" in q_lower or "memory" in q_lower or "unrelated" in q_lower:
                     verdicts.append(
                         EvidenceVerdict(
                             question=q_text,
-                            evidence_ids_cited=found_uuids[:2],
+                            evidence_ids_cited=sec_uuids[:2],
                             verdict="contradicts",
                             reasoning="Telemetry shows metric values within expected nominal baseline; traffic and memory pressure are refuted.",
                         )
@@ -171,7 +172,7 @@ class MockLLMProvider(LLMProvider):
                     verdicts.append(
                         EvidenceVerdict(
                             question=q_text,
-                            evidence_ids_cited=found_uuids[:2],
+                            evidence_ids_cited=sec_uuids[:2],
                             verdict="supports",
                             reasoning="Telemetry confirms telemetry was healthy prior to release and experienced severe connection acquisition timeouts post-deployment.",
                         )
@@ -180,11 +181,22 @@ class MockLLMProvider(LLMProvider):
                     verdicts.append(
                         EvidenceVerdict(
                             question=q_text,
-                            evidence_ids_cited=found_uuids[:1],
-                            verdict="inconclusive",
-                            reasoning="Retrieved evidence does not directly corroborate or refute the inquiry.",
+                            evidence_ids_cited=sec_uuids[:1],
+                            verdict="supports",
+                            reasoning="Retrieved telemetry supports the failure mode under evaluation.",
                         )
                     )
+
+            if not verdicts:
+                found_uuids = [UUID(m) for m in re.findall(uuid_regex, prompt)]
+                verdicts.append(
+                    EvidenceVerdict(
+                        question="Evaluation",
+                        evidence_ids_cited=found_uuids[:2],
+                        verdict="supports",
+                        reasoning="Telemetry corroborates the causal mechanism.",
+                    )
+                )
 
             return InterpretationResponse(verdicts=verdicts)  # type: ignore
 
