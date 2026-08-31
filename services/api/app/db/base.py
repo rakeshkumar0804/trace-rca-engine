@@ -29,7 +29,23 @@ def get_engine() -> AsyncEngine:
     if _engine is None:
         url = get_database_url()
         if "sqlite" in url:
-            _engine = create_async_engine(url, echo=False)
+            from sqlalchemy import event
+            os.makedirs("data", exist_ok=True)
+            _engine = create_async_engine(
+                url,
+                echo=False,
+                connect_args={"check_same_thread": False, "timeout": 30},
+            )
+            @event.listens_for(_engine.sync_engine, "connect")
+            def _set_sqlite_pragma(dbapi_connection, connection_record):
+                try:
+                    cursor = dbapi_connection.cursor()
+                    cursor.execute("PRAGMA journal_mode=WAL")
+                    cursor.execute("PRAGMA synchronous=NORMAL")
+                    cursor.execute("PRAGMA busy_timeout=10000")
+                    cursor.close()
+                except Exception:
+                    pass
         else:
             is_prod = os.getenv("ENVIRONMENT", "").lower() in ("production", "prod")
             pool_size = int(os.getenv("DB_POOL_SIZE", "2" if is_prod else "10"))
