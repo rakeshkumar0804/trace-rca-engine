@@ -61,10 +61,12 @@ async def run_investigation(
     sm = InvestigationStateMachine()
 
     async def persist_step(step: InvestigationStep) -> None:
-        """Incrementally persists an investigation step to the database."""
+        """Incrementally persists an investigation step to the database with cooperative async yield."""
         step_orm = investigation_step_to_orm(step, inv_id)
         session.add(step_orm)
         await session.commit()
+        import asyncio
+        await asyncio.sleep(0.05)
 
     # --------------------------------------------------------------------------
     # 1. INCIDENT_DETECTED

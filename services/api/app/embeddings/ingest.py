@@ -45,6 +45,8 @@ async def _batch_flush_objects(session: AsyncSession, objects: list[Any], chunk_
         chunk = objects[i : i + chunk_size]
         session.add_all(chunk)
         await session.flush()
+        import asyncio
+        await asyncio.sleep(0.02)
 
 
 async def ingest_incident_evidence(

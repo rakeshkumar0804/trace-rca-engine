@@ -98,7 +98,7 @@ export default function Home() {
     };
 
     poll();
-    pollIntervalRef.current = setInterval(poll, 1200);
+    pollIntervalRef.current = setInterval(poll, 2500);
 
     return () => {
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
