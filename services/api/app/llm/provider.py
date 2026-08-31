@@ -255,7 +255,7 @@ class GeminiProvider(LLMProvider):
         prompt: str,
         response_schema: type[T],
         system_instruction: str | None = None,
-        max_retries: int = 4,
+        max_retries: int = 1,
     ) -> T:
         if not self._client:
             raise RuntimeError(
