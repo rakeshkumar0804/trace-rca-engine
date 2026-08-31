@@ -21,8 +21,10 @@ from app.schemas.investigations import InvestigationStepDetailValue
 
 router = APIRouter(prefix="/api/investigations", tags=["Investigations"])
 
-# In-memory tracking of active tasks to prevent duplicate concurrent runs on the same incident
+# In-memory tracking of active tasks and investigation state cache for zero-lock polling
 _running_tasks: dict[UUID, asyncio.Task] = {}
+_investigation_cache: dict[UUID, InvestigationPublic] = {}
+_hypotheses_cache: dict[UUID, list[dict[str, Any]]] = {}
 
 
 class RunInvestigationRequest(BaseModel):
@@ -55,15 +57,51 @@ async def _execute_investigation_worker(incident_id: UUID, investigation_id: UUI
     factory = get_session_factory()
     async with factory() as session:
         try:
-            await run_investigation(
+            inv = await run_investigation(
                 incident_id=incident_id,
                 session=session,
                 llm_provider=provider,
                 investigation_id=investigation_id,
             )
+            # Update in-memory cache with completed investigation record
+            pub_steps = [
+                InvestigationStepPublic(
+                    step_number=s.step_number,
+                    state=s.state.value if hasattr(s.state, "value") else str(s.state),
+                    summary=s.summary,
+                    details=s.details or {},
+                    timestamp=s.timestamp,
+                )
+                for s in inv.steps
+            ]
+            completed_pub = InvestigationPublic(
+                investigation_id=inv.investigation_id,
+                incident_id=inv.incident_id,
+                final_state=inv.final_state.value if hasattr(inv.final_state, "value") else str(inv.final_state),
+                confidence=round(inv.confidence or 0.0, 2),
+                rca_narrative=inv.rca_narrative,
+                leading_hypothesis_id=inv.leading_hypothesis_id,
+                started_at=inv.started_at,
+                completed_at=inv.completed_at,
+                steps=pub_steps,
+            )
+            _investigation_cache[investigation_id] = completed_pub
+
         except Exception as ex:
-            # Fallback error step
             print(f"Investigation execution error: {ex}")
+            # Mark error in cache
+            if investigation_id in _investigation_cache:
+                cached = _investigation_cache[investigation_id]
+                _investigation_cache[investigation_id] = InvestigationPublic(
+                    investigation_id=cached.investigation_id,
+                    incident_id=cached.incident_id,
+                    final_state="inconclusive",
+                    confidence=0.0,
+                    rca_narrative=f"Investigation concluded: {ex}",
+                    started_at=cached.started_at,
+                    completed_at=datetime.now(timezone.utc),
+                    steps=cached.steps,
+                )
         finally:
             _running_tasks.pop(investigation_id, None)
 
@@ -106,11 +144,7 @@ async def start_investigation(
     session.add(initial_inv)
     await session.commit()
 
-    # Launch background task
-    task = asyncio.create_task(_execute_investigation_worker(req.incident_id, inv_id))
-    _running_tasks[inv_id] = task
-
-    return InvestigationPublic(
+    initial_pub = InvestigationPublic(
         investigation_id=inv_id,
         incident_id=req.incident_id,
         final_state="running",
@@ -118,6 +152,13 @@ async def start_investigation(
         started_at=started_at,
         steps=[],
     )
+    _investigation_cache[inv_id] = initial_pub
+
+    # Launch background task
+    task = asyncio.create_task(_execute_investigation_worker(req.incident_id, inv_id))
+    _running_tasks[inv_id] = task
+
+    return initial_pub
 
 
 @router.get("/{investigation_id}", response_model=InvestigationPublic)
@@ -126,9 +167,17 @@ async def get_investigation_detail(
     session: AsyncSession = Depends(get_fastapi_session),
 ) -> InvestigationPublic:
     """Fetches full investigation status and steps so far for polling."""
+    # Check cache first for completed investigations
+    if investigation_id in _investigation_cache:
+        cached = _investigation_cache[investigation_id]
+        if cached.final_state in ("rca_generated", "inconclusive"):
+            return cached
+
     inv_stmt = select(InvestigationORM).where(InvestigationORM.investigation_id == investigation_id)
     inv = (await session.execute(inv_stmt)).scalar_one_or_none()
     if not inv:
+        if investigation_id in _investigation_cache:
+            return _investigation_cache[investigation_id]
         raise HTTPException(status_code=404, detail="Investigation not found")
 
     steps_stmt = (
@@ -138,7 +187,7 @@ async def get_investigation_detail(
     )
     steps = (await session.execute(steps_stmt)).scalars().all()
 
-    return InvestigationPublic(
+    inv_pub = InvestigationPublic(
         investigation_id=inv.investigation_id,
         incident_id=inv.incident_id,
         final_state=inv.final_state,
@@ -158,6 +207,8 @@ async def get_investigation_detail(
             for s in steps
         ],
     )
+    _investigation_cache[investigation_id] = inv_pub
+    return inv_pub
 
 
 @router.get("/{investigation_id}/timeline")
