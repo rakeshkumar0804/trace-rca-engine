@@ -322,9 +322,10 @@ async def start_demo_investigation(
     from app.generator.incidents.incident_types import IncidentType
     import random
 
-    # Use seed 1 (or 2) for deterministic high-accuracy root-cause scenario
+    # Use seed 1 (or 2) for deterministic high-accuracy root-cause scenario with fresh benchmark_id
+    run_uuid = uuid4()
     spec = BenchmarkIncidentSpec(
-        benchmark_id=f"demo-seed-1",
+        benchmark_id=f"demo-{run_uuid}",
         incident_type=IncidentType.BAD_DEPLOYMENT_DB_EXHAUSTION.value,
         seed=1,
         duration_minutes=15,
