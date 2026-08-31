@@ -27,8 +27,8 @@ TRACE solves this by separating **hypothesis generation and interpretation** (po
 
 ## 2. Live Demo
 
-- **Live Frontend**: [https://trace-rca-engine.vercel.app](https://trace-rca-engine.vercel.app) *(Deployment target)*
-- **Live Backend API**: [https://trace-api.onrender.com/docs](https://trace-api.onrender.com/docs) *(Swagger UI)*
+- **Live Frontend**: [https://trace-rca-engine.vercel.app](https://trace-rca-engine.vercel.app)
+- **Live Backend API**: [https://trace-rca-engine.onrender.com/docs](https://trace-rca-engine.onrender.com/docs) *(Swagger UI)*
 
 ### How to Run the Demo Cold:
 1. Open the frontend UI.
