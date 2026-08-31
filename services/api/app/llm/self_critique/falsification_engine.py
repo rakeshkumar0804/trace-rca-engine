@@ -107,6 +107,9 @@ async def run_self_critique(
     llm_provider: LLMProvider | None = None,
     target_hypothesis_id: UUID | None = None,
     max_iterations: int = 3,
+    timeline: Any | None = None,
+    deployments: list[Deployment] | None = None,
+    commits: list[GitCommit] | None = None,
 ) -> SelfCritiqueResult:
     """Executes the 6-step self-critique / falsification loop.
     
@@ -119,7 +122,8 @@ async def run_self_critique(
     7. Computes deterministic confidence score (Rule 4).
     """
     provider = llm_provider or get_llm_provider()
-    timeline = await build_timeline(session, incident_id)
+    if timeline is None:
+        timeline = await build_timeline(session, incident_id)
 
     # Query incident record for investigator-facing symptoms and affected services
     inc_stmt = select(IncidentORM).where(IncidentORM.incident_id == incident_id)
@@ -130,8 +134,10 @@ async def run_self_critique(
     ]
 
     # 0. Ensure all hypotheses have their Phase 5 baseline scores populated before critique
-    deployments = [c for c in await get_changes_before(session, incident_id, timeline.start_time + timedelta(minutes=15), lookback_minutes=30) if isinstance(c, Deployment)]
-    commits = [c for c in await get_changes_before(session, incident_id, timeline.start_time + timedelta(minutes=15), lookback_minutes=30) if isinstance(c, GitCommit)]
+    if deployments is None:
+        deployments = [c for c in await get_changes_before(session, incident_id, timeline.start_time + timedelta(minutes=15), lookback_minutes=30) if isinstance(c, Deployment)]
+    if commits is None:
+        commits = [c for c in await get_changes_before(session, incident_id, timeline.start_time + timedelta(minutes=15), lookback_minutes=30) if isinstance(c, GitCommit)]
     checkout_events = await get_events_for_entity(session, incident_id, "checkout-service", limit=50)
 
     all_supporting_map: dict[UUID, list[NormalizedEvent]] = {}

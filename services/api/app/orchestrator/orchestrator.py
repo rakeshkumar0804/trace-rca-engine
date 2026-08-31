@@ -338,6 +338,9 @@ async def run_investigation(
             llm_provider=provider,
             target_hypothesis_id=target_hyp.id,
             max_iterations=1,
+            timeline=timeline,
+            deployments=deployments,
+            commits=commits,
         )
 
         critique_step = critique_result.steps[0] if critique_result.steps else None
