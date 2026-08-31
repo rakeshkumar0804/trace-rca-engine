@@ -9,6 +9,8 @@ services:
     envVars:
       - key: ENVIRONMENT
         value: production
+      - key: EMBEDDING_PROVIDER
+        value: deterministic
       - key: GEMINI_MODEL
         value: gemini-2.5-flash
       - key: CORS_ORIGINS

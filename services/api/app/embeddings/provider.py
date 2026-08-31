@@ -127,8 +127,8 @@ def _get_or_create_fastembed_singleton() -> FastEmbedProvider:
 
 
 def get_embedding_provider() -> EmbeddingProvider:
-    """Returns the configured embedding provider. Defaults to FastEmbed for production."""
-    provider_type = os.getenv("EMBEDDING_PROVIDER", "fastembed").lower()
+    """Returns the configured embedding provider. Defaults to Deterministic for memory-constrained production."""
+    provider_type = os.getenv("EMBEDDING_PROVIDER", "deterministic").lower()
     if provider_type == "fastembed":
         return _get_or_create_fastembed_singleton()
     return _DEFAULT_DETERMINISTIC_PROVIDER
