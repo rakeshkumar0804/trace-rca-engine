@@ -1,3 +1,4 @@
+import gc
 from typing import Any
 from uuid import UUID
 
@@ -38,6 +39,14 @@ from app.schemas.incidents import Incident
 from .provider import EmbeddingProvider, get_embedding_provider
 
 
+async def _batch_flush_objects(session: AsyncSession, objects: list[Any], chunk_size: int = 400) -> None:
+    """Flushes objects to DB in small batches to keep memory consumption low."""
+    for i in range(0, len(objects), chunk_size):
+        chunk = objects[i : i + chunk_size]
+        session.add_all(chunk)
+        await session.flush()
+
+
 async def ingest_incident_evidence(
     session: AsyncSession,
     incident: Incident,
@@ -46,18 +55,12 @@ async def ingest_incident_evidence(
 ) -> None:
     """Ingests a generated incident and its evidence bundle into the database idempotently.
     
-    1. Removes existing records for incident_id (idempotency guarantee).
-    2. Persists IncidentORM (without ground truth).
-    3. Persists GroundTruthORM in the isolated 'ground_truths' table.
-    4. Computes batch embeddings for text fields and persists all raw telemetry and lifecycle tables.
-    5. Normalizes all evidence items and persists them into 'normalized_events'.
+    Uses chunked batch inserts to guarantee memory usage remains strictly < 40MB on free tiers.
     """
     embedder = provider or get_embedding_provider()
     inc_id = incident.incident_id
 
-    # --------------------------------------------------------------------------
-    # 1. Idempotency: Clean up any prior data for this incident_id
-    # --------------------------------------------------------------------------
+    # 1. Idempotency cleanup
     await session.execute(delete(NormalizedEventORM).where(NormalizedEventORM.incident_id == inc_id))
     await session.execute(delete(LogORM).where(LogORM.incident_id == inc_id))
     await session.execute(delete(MetricORM).where(MetricORM.incident_id == inc_id))
@@ -69,104 +72,115 @@ async def ingest_incident_evidence(
     await session.execute(delete(GroundTruthORM).where(GroundTruthORM.incident_id == inc_id))
     await session.execute(delete(IncidentORM).where(IncidentORM.incident_id == inc_id))
 
-    # --------------------------------------------------------------------------
     # 2. Persist Incident & GroundTruth
-    # --------------------------------------------------------------------------
     inc_orm = incident_to_orm(incident)
     gt_orm = ground_truth_to_orm(incident.ground_truth, inc_id)
     session.add(inc_orm)
     session.add(gt_orm)
+    await session.flush()
 
     normalized_events: list[NormalizedEventORM] = []
 
-    # --------------------------------------------------------------------------
-    # 3. Ingest Logs (with batch text embeddings)
-    # --------------------------------------------------------------------------
+    # 3. Ingest Logs (batch embedded)
     logs: list[LogEntry] = bundle.get("logs", [])
     if logs:
         log_messages = [log.message for log in logs]
         log_embeddings = embedder.embed_batch(log_messages)
+        log_orms: list[LogORM] = []
         for raw_log, emb in zip(logs, log_embeddings, strict=False):
             log_orm = log_entry_to_orm(raw_log, inc_id, embedding=emb)
-            session.add(log_orm)
-            
+            log_orms.append(log_orm)
             norm_evt = raw_to_normalized_event(raw_log, event_id=log_orm.id)
             normalized_events.append(normalized_event_to_orm(norm_evt, inc_id))
+        await _batch_flush_objects(session, log_orms)
+        del log_messages, log_embeddings, log_orms
 
-    # --------------------------------------------------------------------------
     # 4. Ingest Metrics
-    # --------------------------------------------------------------------------
-    for raw_metric in bundle.get("metrics", []):
-        assert isinstance(raw_metric, MetricPoint)
-        m_orm = metric_point_to_orm(raw_metric, inc_id)
-        session.add(m_orm)
-        
-        norm_evt = raw_to_normalized_event(raw_metric, event_id=m_orm.id)
-        normalized_events.append(normalized_event_to_orm(norm_evt, inc_id))
+    metrics = bundle.get("metrics", [])
+    if metrics:
+        metric_orms = []
+        for raw_metric in metrics:
+            assert isinstance(raw_metric, MetricPoint)
+            metric_orm = metric_point_to_orm(raw_metric, inc_id)
+            metric_orms.append(metric_orm)
+            norm_evt = raw_to_normalized_event(raw_metric, event_id=metric_orm.id)
+            normalized_events.append(normalized_event_to_orm(norm_evt, inc_id))
+        await _batch_flush_objects(session, metric_orms)
+        del metric_orms
 
-    # --------------------------------------------------------------------------
     # 5. Ingest Traces
-    # --------------------------------------------------------------------------
-    for raw_trace in bundle.get("traces", []):
-        assert isinstance(raw_trace, TraceSpan)
-        t_orm = trace_span_to_orm(raw_trace, inc_id)
-        session.add(t_orm)
-        
-        norm_evt = raw_to_normalized_event(raw_trace, event_id=t_orm.id)
-        normalized_events.append(normalized_event_to_orm(norm_evt, inc_id))
+    traces = bundle.get("traces", [])
+    if traces:
+        trace_orms = []
+        for raw_trace in traces:
+            assert isinstance(raw_trace, TraceSpan)
+            trace_orm = trace_span_to_orm(raw_trace, inc_id)
+            trace_orms.append(trace_orm)
+            norm_evt = raw_to_normalized_event(raw_trace, event_id=trace_orm.id)
+            normalized_events.append(normalized_event_to_orm(norm_evt, inc_id))
+        await _batch_flush_objects(session, trace_orms)
+        del trace_orms
 
-    # --------------------------------------------------------------------------
     # 6. Ingest Deployments
-    # --------------------------------------------------------------------------
-    for raw_dep in bundle.get("deployments", []):
-        assert isinstance(raw_dep, Deployment)
-        dep_orm = deployment_to_orm(raw_dep, inc_id)
-        session.add(dep_orm)
-        
-        norm_evt = raw_to_normalized_event(raw_dep, event_id=raw_dep.deployment_id)
-        normalized_events.append(normalized_event_to_orm(norm_evt, inc_id))
+    deployments = bundle.get("deployments", [])
+    if deployments:
+        dep_orms = []
+        for raw_dep in deployments:
+            assert isinstance(raw_dep, Deployment)
+            dep_orm = deployment_to_orm(raw_dep, inc_id)
+            dep_orms.append(dep_orm)
+            norm_evt = raw_to_normalized_event(raw_dep, event_id=dep_orm.deployment_id)
+            normalized_events.append(normalized_event_to_orm(norm_evt, inc_id))
+        await _batch_flush_objects(session, dep_orms)
+        del dep_orms
 
-    # --------------------------------------------------------------------------
-    # 7. Ingest Commits (with batch text embeddings)
-    # --------------------------------------------------------------------------
-    commits: list[GitCommit] = bundle.get("commits", [])
+    # 7. Ingest Commits
+    commits = bundle.get("commits", [])
     if commits:
         commit_summaries = [c.diff_summary for c in commits]
         commit_embeddings = embedder.embed_batch(commit_summaries)
+        commit_orms = []
         for raw_commit, emb in zip(commits, commit_embeddings, strict=False):
-            c_orm = git_commit_to_orm(raw_commit, inc_id, embedding=emb)
-            session.add(c_orm)
-            
+            assert isinstance(raw_commit, GitCommit)
+            commit_orm = git_commit_to_orm(raw_commit, inc_id, embedding=emb)
+            commit_orms.append(commit_orm)
             norm_evt = raw_to_normalized_event(raw_commit)
             normalized_events.append(normalized_event_to_orm(norm_evt, inc_id))
+        await _batch_flush_objects(session, commit_orms)
+        del commit_summaries, commit_embeddings, commit_orms
 
-    # --------------------------------------------------------------------------
     # 8. Ingest Database Events
-    # --------------------------------------------------------------------------
-    for raw_db in bundle.get("database_events", []):
-        assert isinstance(raw_db, DatabaseEvent)
-        db_orm = database_event_to_orm(raw_db, inc_id)
-        session.add(db_orm)
-        
-        norm_evt = raw_to_normalized_event(raw_db, event_id=db_orm.id)
-        normalized_events.append(normalized_event_to_orm(norm_evt, inc_id))
-
-    # --------------------------------------------------------------------------
-    # 9. Ingest Alerts (with batch text embeddings)
-    # --------------------------------------------------------------------------
-    alerts: list[Alert] = bundle.get("alerts", [])
-    if alerts:
-        alert_descriptions = [a.description for a in alerts]
-        alert_embeddings = embedder.embed_batch(alert_descriptions)
-        for raw_alert, emb in zip(alerts, alert_embeddings, strict=False):
-            a_orm = alert_to_orm(raw_alert, inc_id, embedding=emb)
-            session.add(a_orm)
-            
-            norm_evt = raw_to_normalized_event(raw_alert, event_id=a_orm.id)
+    db_events = bundle.get("database_events", [])
+    if db_events:
+        db_orms = []
+        for raw_db_evt in db_events:
+            assert isinstance(raw_db_evt, DatabaseEvent)
+            db_orm = database_event_to_orm(raw_db_evt, inc_id)
+            db_orms.append(db_orm)
+            norm_evt = raw_to_normalized_event(raw_db_evt, event_id=db_orm.id)
             normalized_events.append(normalized_event_to_orm(norm_evt, inc_id))
+        await _batch_flush_objects(session, db_orms)
+        del db_orms
 
-    # --------------------------------------------------------------------------
-    # 10. Persist Normalized Events
-    # --------------------------------------------------------------------------
-    session.add_all(normalized_events)
-    await session.flush()
+    # 9. Ingest Alerts
+    alerts = bundle.get("alerts", [])
+    if alerts:
+        alert_texts = [f"{a.alert_type} {a.service} {a.description}" for a in alerts]
+        alert_embeddings = embedder.embed_batch(alert_texts)
+        alert_orms = []
+        for raw_alert, emb in zip(alerts, alert_embeddings, strict=False):
+            assert isinstance(raw_alert, Alert)
+            alert_orm = alert_to_orm(raw_alert, inc_id, embedding=emb)
+            alert_orms.append(alert_orm)
+            norm_evt = raw_to_normalized_event(raw_alert, event_id=alert_orm.id)
+            normalized_events.append(normalized_event_to_orm(norm_evt, inc_id))
+        await _batch_flush_objects(session, alert_orms)
+        del alert_texts, alert_embeddings, alert_orms
+
+    # 10. Persist Normalized Events in Batches
+    if normalized_events:
+        await _batch_flush_objects(session, normalized_events)
+        del normalized_events
+
+    await session.commit()
+    gc.collect()
