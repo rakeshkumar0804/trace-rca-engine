@@ -315,28 +315,23 @@ async def get_investigation_hypotheses(
 async def start_demo_investigation(
     session: AsyncSession = Depends(get_fastapi_session),
 ) -> InvestigationPublic:
-    """Generates the verified demo incident (bad deployment seed=1) with a fresh unique ID and kicks off investigation."""
+    """Generates the verified demo incident (bad deployment seed=1) and kicks off investigation."""
     from app.embeddings.ingest import ingest_incident_evidence
     from app.embeddings.provider import get_embedding_provider
     from app.evaluation.benchmark_incidents import BenchmarkIncidentSpec, instantiate_benchmark_incident
     from app.generator.incidents.incident_types import IncidentType
+    import random
 
-    fresh_inc_id = uuid4()
+    # Use seed 1 (or 2) for deterministic high-accuracy root-cause scenario
     spec = BenchmarkIncidentSpec(
-        benchmark_id=f"demo-run-{fresh_inc_id}",
+        benchmark_id=f"demo-seed-1",
         incident_type=IncidentType.BAD_DEPLOYMENT_DB_EXHAUSTION.value,
         seed=1,
         duration_minutes=15,
         description="Demo Incident: Bad deployment causing DB pool exhaustion",
     )
     incident, bundle = instantiate_benchmark_incident(spec)
-    incident.incident_id = fresh_inc_id
-    for cat in bundle:
-        for item in bundle[cat]:
-            if hasattr(item, "incident_id"):
-                item.incident_id = fresh_inc_id
-
     embedder = get_embedding_provider()
     await ingest_incident_evidence(session, incident, bundle, provider=embedder)
 
-    return await start_investigation(RunInvestigationRequest(incident_id=fresh_inc_id), session)
+    return await start_investigation(RunInvestigationRequest(incident_id=incident.incident_id), session)
