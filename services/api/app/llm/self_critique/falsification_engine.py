@@ -1,7 +1,5 @@
-# CRITICAL ISOLATION ENFORCEMENT: This falsification engine queries ONLY investigator-facing tables.
-# It must NEVER join or query the 'ground_truths' table.
-
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from uuid import NAMESPACE_DNS, UUID, uuid5
 
 from sqlalchemy import select
