@@ -28,11 +28,20 @@ def get_engine() -> AsyncEngine:
     global _engine, _session_maker
     if _engine is None:
         url = get_database_url()
-        # Handle SQLite vs PostgreSQL configuration
         if "sqlite" in url:
             _engine = create_async_engine(url, echo=False)
         else:
-            _engine = create_async_engine(url, echo=False, pool_size=10, max_overflow=20)
+            is_prod = os.getenv("ENVIRONMENT", "").lower() in ("production", "prod")
+            pool_size = int(os.getenv("DB_POOL_SIZE", "2" if is_prod else "10"))
+            max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "3" if is_prod else "20"))
+            _engine = create_async_engine(
+                url,
+                echo=False,
+                pool_size=pool_size,
+                max_overflow=max_overflow,
+                pool_timeout=30,
+                pool_pre_ping=True,
+            )
         _session_maker = async_sessionmaker(bind=_engine, expire_on_commit=False)
     return _engine
 

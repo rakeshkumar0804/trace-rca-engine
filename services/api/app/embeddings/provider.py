@@ -26,6 +26,9 @@ class EmbeddingProvider(ABC):
         return [self.embed_text(t) for t in texts]
 
 
+_fastembed_singleton = None
+
+
 class FastEmbedProvider(EmbeddingProvider):
     """Production embedding provider using a local ONNX-based neural embedding model
     (BAAI/bge-small-en-v1.5, 384-dim) via FastEmbed. Runs fully locally, no API key,
@@ -33,8 +36,13 @@ class FastEmbedProvider(EmbeddingProvider):
     """
 
     def __init__(self, model_name: str = "BAAI/bge-small-en-v1.5"):
-        from fastembed import TextEmbedding
-        self._model = TextEmbedding(model_name=model_name)
+        global _fastembed_singleton
+        if _fastembed_singleton is None:
+            import logging
+            logging.getLogger("app.embeddings").info(f"Loading FastEmbed ONNX model singleton ({model_name}) with threads=1...")
+            from fastembed import TextEmbedding
+            _fastembed_singleton = TextEmbedding(model_name=model_name, threads=1)
+        self._model = _fastembed_singleton
         self._dim = 384
 
     @property
