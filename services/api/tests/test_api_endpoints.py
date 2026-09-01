@@ -160,3 +160,48 @@ class TestEvidenceAPI:
         fake_id = uuid4()
         res = await client.get(f"/api/evidence/{fake_id}")
         assert res.status_code == 404
+
+
+class TestErrorFormattingAndDemoReplay:
+    """Tests for user-facing error translation and progressive demo replay."""
+
+    def test_format_human_error_message(self):
+        from app.orchestrator.error_handling import format_human_error_message
+
+        # 429 / Quota Error
+        err_429 = RuntimeError("429 RESOURCE_EXHAUSTED: Resource has been exhausted (e.g. check quota)")
+        msg_429 = format_human_error_message(err_429)
+        assert "AI provider's request quota" in msg_429
+        assert "Demo Incident" in msg_429
+        assert "429" not in msg_429  # Raw error codes omitted from human message
+
+        # Timeout Error
+        err_timeout = TimeoutError("Deadline exceeded after 30000ms")
+        msg_timeout = format_human_error_message(err_timeout)
+        assert "timed out" in msg_timeout
+
+        # Schema Error
+        err_schema = ValueError("JSONDecodeError: invalid json schema")
+        msg_schema = format_human_error_message(err_schema)
+        assert "schema" in msg_schema
+
+    @pytest.mark.anyio
+    async def test_demo_investigation_progressive_replay(self, client: AsyncClient):
+        import asyncio
+
+        # Start demo investigation
+        demo_res = await client.post("/api/investigations/demo")
+        assert demo_res.status_code == 200
+        inv_data = demo_res.json()
+        inv_id = inv_data["investigation_id"]
+
+        # Wait briefly for replay worker to progress
+        await asyncio.sleep(0.5)
+
+        # Poll status
+        poll_res = await client.get(f"/api/investigations/{inv_id}")
+        assert poll_res.status_code == 200
+        poll_data = poll_res.json()
+        assert poll_data["investigation_id"] == inv_id
+        assert "ground_truth" not in poll_data
+

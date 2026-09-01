@@ -133,9 +133,35 @@ export function Screen3FinalRCA({
             </div>
           </div>
 
+          {/* User-facing polite message */}
           <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-sm font-mono text-slate-300 leading-relaxed">
             {investigation.rca_narrative || 'The investigation evaluated candidate hypotheses against retrieved telemetry, but candidates were either contradicted during self-critique or lacked sufficient causal support.'}
           </div>
+
+          {/* Quota / Provider Notice Banner if rate limit occurred */}
+          {((investigation.rca_narrative || '').toLowerCase().includes('quota') ||
+            (investigation.rca_narrative || '').toLowerCase().includes('limit') ||
+            (investigation.rca_narrative || '').toLowerCase().includes('ai provider') ||
+            (investigation.rca_narrative || '').toLowerCase().includes('timeout')) && (
+            <div className="p-5 rounded-xl bg-amber-950/40 border border-amber-800/80 space-y-3">
+              <div className="flex items-center gap-2 text-amber-300 font-mono font-bold text-xs">
+                <AlertTriangle className="w-4 h-4 text-amber-400" />
+                <span>AI Provider Limit Notice</span>
+              </div>
+              <p className="text-xs font-mono text-amber-200/90 leading-relaxed">
+                Upstream model quota or rate limits were encountered on this custom run. You can explore the complete, verified 100% confidence investigation on the Demo Incident without consuming API limits.
+              </p>
+              <div>
+                <button
+                  onClick={onBackToLauncher}
+                  className="px-4 py-2 text-xs font-mono font-bold bg-cyan-500 hover:bg-cyan-400 text-slate-950 rounded-xl transition-all flex items-center gap-2 shadow-lg cursor-pointer"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  <span>Launch Pre-Cached Demo Incident</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="space-y-4">
             <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-300">

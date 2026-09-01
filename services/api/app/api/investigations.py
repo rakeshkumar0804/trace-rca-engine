@@ -21,11 +21,6 @@ from app.schemas.investigations import InvestigationStepDetailValue
 
 router = APIRouter(prefix="/api/investigations", tags=["Investigations"])
 
-# In-memory tracking of active tasks and investigation state cache for zero-lock polling
-_running_tasks: dict[UUID, asyncio.Task] = {}
-_investigation_cache: dict[UUID, InvestigationPublic] = {}
-_hypotheses_cache: dict[UUID, list[dict[str, Any]]] = {}
-
 
 class RunInvestigationRequest(BaseModel):
     incident_id: UUID
@@ -51,8 +46,18 @@ class InvestigationPublic(BaseModel):
     steps: list[InvestigationStepPublic] = Field(default_factory=list)
 
 
+# In-memory tracking of active tasks and investigation state cache for zero-lock polling
+_running_tasks: dict[UUID, asyncio.Task] = {}
+_investigation_cache: dict[UUID, InvestigationPublic] = {}
+_hypotheses_cache: dict[UUID, list[dict[str, Any]]] = {}
+
+
 async def _execute_investigation_worker(incident_id: UUID, investigation_id: UUID) -> None:
     """Background worker executing the full investigation pipeline with live DB step persistence."""
+    from app.orchestrator.error_handling import format_human_error_message
+    import logging
+    logger = logging.getLogger("trace.api.investigations")
+
     provider = get_llm_provider()
     factory = get_session_factory()
     async with factory() as session:
@@ -88,8 +93,9 @@ async def _execute_investigation_worker(incident_id: UUID, investigation_id: UUI
             _investigation_cache[investigation_id] = completed_pub
 
         except Exception as ex:
-            print(f"Investigation execution error: {ex}")
-            # Mark error in cache
+            logger.exception(f"Investigation execution error for {investigation_id}: {ex}")
+            friendly_msg = format_human_error_message(ex)
+            # Mark error in cache with clean user-facing explanation
             if investigation_id in _investigation_cache:
                 cached = _investigation_cache[investigation_id]
                 _investigation_cache[investigation_id] = InvestigationPublic(
@@ -97,7 +103,7 @@ async def _execute_investigation_worker(incident_id: UUID, investigation_id: UUI
                     incident_id=cached.incident_id,
                     final_state="inconclusive",
                     confidence=0.0,
-                    rca_narrative=f"Investigation concluded: {ex}",
+                    rca_narrative=friendly_msg,
                     started_at=cached.started_at,
                     completed_at=datetime.now(timezone.utc),
                     steps=cached.steps,
@@ -313,26 +319,63 @@ async def get_investigation_hypotheses(
 
 @router.post("/demo", response_model=InvestigationPublic)
 async def start_demo_investigation(
+    refresh: bool = False,
     session: AsyncSession = Depends(get_fastapi_session),
 ) -> InvestigationPublic:
-    """Generates the verified demo incident (bad deployment seed=1) and kicks off investigation."""
-    from app.embeddings.ingest import ingest_incident_evidence
-    from app.embeddings.provider import get_embedding_provider
-    from app.evaluation.benchmark_incidents import BenchmarkIncidentSpec, instantiate_benchmark_incident
-    from app.generator.incidents.incident_types import IncidentType
-    import random
+    """Launches the verified demo investigation.
+    
+    Replays the pre-computed golden reference investigation progressively over the live
+    polling UX so viewers experience the full autonomous state machine without consuming
+    external LLM API quota or suffering 429 rate limit failures.
+    
+    Pass refresh=true to force a real live LLM pipeline execution.
+    """
+    from app.orchestrator.demo_reference import get_or_generate_demo_reference, replay_demo_investigation
 
-    # Use seed 1 (or 2) for deterministic high-accuracy root-cause scenario with fresh benchmark_id
-    run_uuid = uuid4()
-    spec = BenchmarkIncidentSpec(
-        benchmark_id=f"demo-{run_uuid}",
-        incident_type=IncidentType.BAD_DEPLOYMENT_DB_EXHAUSTION.value,
-        seed=1,
-        duration_minutes=15,
-        description="Demo Incident: Bad deployment causing DB pool exhaustion",
+    if refresh:
+        inc_id, ref_inv = await get_or_generate_demo_reference(session, force_refresh=True)
+        return await start_investigation(RunInvestigationRequest(incident_id=inc_id), session)
+
+    # 1. Get or ensure the cached reference investigation is available in memory/DB
+    inc_id, ref_inv = await get_or_generate_demo_reference(session, force_refresh=False)
+
+    # 2. Allocate a fresh unique investigation ID for this user demo session
+    new_inv_id = uuid4()
+    started_at = datetime.now(timezone.utc)
+
+    # Create initial investigation record in DB
+    initial_inv = InvestigationORM(
+        investigation_id=new_inv_id,
+        incident_id=inc_id,
+        final_state="running",
+        confidence=0.0,
+        started_at=started_at,
     )
-    incident, bundle = instantiate_benchmark_incident(spec)
-    embedder = get_embedding_provider()
-    await ingest_incident_evidence(session, incident, bundle, provider=embedder)
+    session.add(initial_inv)
+    await session.commit()
 
-    return await start_investigation(RunInvestigationRequest(incident_id=incident.incident_id), session)
+    initial_pub = InvestigationPublic(
+        investigation_id=new_inv_id,
+        incident_id=inc_id,
+        final_state="running",
+        confidence=0.0,
+        started_at=started_at,
+        steps=[],
+    )
+    _investigation_cache[new_inv_id] = initial_pub
+
+    # 3. Launch progressive replay in background task
+    factory = get_session_factory()
+    task = asyncio.create_task(
+        replay_demo_investigation(
+            target_investigation_id=new_inv_id,
+            incident_id=inc_id,
+            ref_investigation=ref_inv,
+            session_factory=factory,
+            investigation_cache=_investigation_cache,
+            step_delay_seconds=0.75,
+        )
+    )
+    _running_tasks[new_inv_id] = task
+
+    return initial_pub
