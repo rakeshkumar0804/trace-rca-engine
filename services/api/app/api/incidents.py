@@ -60,9 +60,9 @@ async def generate_incident(
     else:
         chosen_type = req.incident_type
 
-    # Resolve seed & duration
+    # Resolve seed & duration (default 15 minutes for rapid sub-2s cloud ingestion)
     seed_val = req.seed if req.seed is not None else random.randint(100, 99999)
-    duration = req.duration_minutes or (45 if chosen_type == IncidentType.MEMORY_LEAK_MASKED_DEPLOYMENT.value else 30)
+    duration = req.duration_minutes or 15
 
     spec = BenchmarkIncidentSpec(
         benchmark_id=f"gen-{seed_val}",
