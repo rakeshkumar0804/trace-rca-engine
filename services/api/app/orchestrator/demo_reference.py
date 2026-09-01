@@ -1,4 +1,4 @@
-﻿"""Pre-computed golden reference investigation cache and progressive replay for the Demo Incident.
+"""Pre-computed golden reference investigation cache and progressive replay for the Demo Incident.
 
 Guarantees 100% reliable, zero-quota demo evaluations on "Run Demo Incident" regardless
 of external Gemini API rate limits or daily quotas.
@@ -142,6 +142,11 @@ async def replay_demo_investigation(
 
     try:
         accumulated_steps: list[InvestigationStepPublic] = []
+        target_started_at = (
+            investigation_cache[target_investigation_id].started_at
+            if target_investigation_id in investigation_cache
+            else datetime.now(timezone.utc)
+        )
 
         for step in ref_investigation.steps:
             await asyncio.sleep(step_delay_seconds)
@@ -170,7 +175,7 @@ async def replay_demo_investigation(
                 confidence=round(ref_investigation.confidence, 2) if step.step_number == len(ref_investigation.steps) else 0.0,
                 rca_narrative=ref_investigation.rca_narrative if step.step_number == len(ref_investigation.steps) else None,
                 leading_hypothesis_id=ref_investigation.leading_hypothesis_id if step.step_number == len(ref_investigation.steps) else None,
-                started_at=ref_investigation.started_at,
+                started_at=target_started_at,
                 completed_at=datetime.now(timezone.utc) if step.step_number == len(ref_investigation.steps) else None,
                 steps=list(accumulated_steps),
             )

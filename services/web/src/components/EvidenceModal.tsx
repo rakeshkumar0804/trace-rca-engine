@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { EvidenceItem } from '../types';
-import { fetchEvidenceDetail, extractErrorMessage } from '../lib/api';
+import { fetchEvidenceDetail, extractErrorMessage, formatLocalTime } from '../lib/api';
 import { X, CheckCircle2, AlertTriangle, Activity, Database, GitCommit, FileText, Copy, Terminal } from 'lucide-react';
 
 interface EvidenceModalProps {
@@ -110,9 +110,9 @@ export function EvidenceModal({ evidenceId, onClose }: EvidenceModalProps) {
                   <span className="text-sm font-mono font-medium text-slate-200">{evidence.service}</span>
                 </div>
                 <div className="p-3 rounded-lg bg-slate-950/60 border border-slate-800">
-                  <span className="text-xs text-slate-500 font-mono block">TIMESTAMP (UTC)</span>
+                  <span className="text-xs text-slate-500 font-mono block">LOCAL TIME</span>
                   <span className="text-sm font-mono text-slate-200">
-                    {new Date(evidence.timestamp).toLocaleTimeString()} ({new Date(evidence.timestamp).toISOString().split('T')[0]})
+                    {formatLocalTime(evidence.timestamp)}
                   </span>
                 </div>
                 {evidence.severity && (

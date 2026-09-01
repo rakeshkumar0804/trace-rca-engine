@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { IncidentSummary, Investigation } from '../types';
-import { generateIncident, startInvestigation, startDemoInvestigation, extractErrorMessage } from '../lib/api';
+import { generateIncident, startInvestigation, startDemoInvestigation, extractErrorMessage, formatLocalTime } from '../lib/api';
 import { Play, Sparkles, RefreshCw, Activity, Server, Clock, AlertCircle, ShieldAlert, Cpu, Loader2 } from 'lucide-react';
 
 interface Screen1LauncherProps {
@@ -31,7 +31,8 @@ export function Screen1Launcher({
     setGenerating(true);
     setError(null);
     try {
-      const seedVal = seedInput.trim() ? parseInt(seedInput.trim(), 10) : undefined;
+      const cleanSeed = seedInput.trim();
+      const seedVal = cleanSeed ? parseInt(cleanSeed, 10) : undefined;
       const newInc = await generateIncident(selectedType, seedVal);
       onRefreshIncidents();
       const inv = await startInvestigation(newInc.incident_id);
@@ -147,10 +148,12 @@ export function Screen1Launcher({
             <div className="space-y-2">
               <label className="text-xs font-mono text-slate-300">Deterministic Seed (Optional)</label>
               <input
-                type="number"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
                 placeholder="e.g. 42 (leave blank for random)"
                 value={seedInput}
-                onChange={(e) => setSeedInput(e.target.value)}
+                onChange={(e) => setSeedInput(e.target.value.replace(/[^0-9]/g, ''))}
                 className="w-full px-3 py-2 text-xs font-mono bg-slate-950 border border-slate-800 rounded-xl text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-600"
               />
             </div>
@@ -226,7 +229,7 @@ export function Screen1Launcher({
                         <Server className="w-3 h-3 text-cyan-400" /> {inc.affected_services?.join(', ') || 'cluster'}
                       </span>
                       <span className="flex items-center gap-1">
-                        <Clock className="w-3 h-3 text-slate-400" /> {new Date(inc.started_at).toLocaleTimeString()}
+                        <Clock className="w-3 h-3 text-slate-400" /> {formatLocalTime(inc.started_at)}
                       </span>
                       <span className="flex items-center gap-1">
                         <Activity className="w-3 h-3 text-emerald-400" /> {inc.duration_minutes}m duration

@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { Investigation, HypothesisData, EvidenceItem, TimelineData } from '../types';
+import { formatLocalTime } from '../lib/api';
 import { 
   ArrowLeft, CheckCircle2, XCircle, AlertTriangle, Activity, 
   Terminal, ShieldCheck, Sparkles, Brain, Cpu, Database, ChevronRight, Layers, HelpCircle
@@ -66,7 +67,7 @@ export function Screen2Investigation({
               </span>
             </div>
             <p className="text-xs font-mono text-slate-400 mt-0.5">
-              ID: {investigation.investigation_id} | Started: {new Date(investigation.started_at).toLocaleTimeString()}
+              ID: {investigation.investigation_id} | Started: {formatLocalTime(investigation.started_at)}
             </p>
           </div>
         </div>
@@ -126,7 +127,7 @@ export function Screen2Investigation({
                       </span>
                     </div>
                     <span className="text-[11px] font-mono text-slate-500">
-                      {new Date(step.timestamp).toLocaleTimeString()}
+                      {formatLocalTime(step.timestamp)}
                     </span>
                   </div>
 
@@ -300,15 +301,15 @@ export function Screen2Investigation({
 
               <div className="space-y-2.5">
                 {timeline.clusters.map((c) => (
-                  <div key={c.cluster_id} className="p-3 rounded-lg bg-slate-950 border border-slate-800 text-xs font-mono space-y-1">
-                    <div className="flex items-center justify-between text-slate-400">
-                      <span className="text-cyan-300 font-medium">{new Date(c.start_time).toLocaleTimeString()} - {new Date(c.end_time).toLocaleTimeString()}</span>
-                      <span>{c.event_count} events</span>
-                    </div>
-                    <p className="text-slate-300 text-[11px] leading-snug">{c.summary}</p>
-                  </div>
-                ))}
-              </div>
+                   <div key={c.cluster_id} className="p-3 rounded-lg bg-slate-950 border border-slate-800 text-xs font-mono space-y-1">
+                     <div className="flex items-center justify-between text-slate-400">
+                       <span className="text-cyan-300 font-medium">{formatLocalTime(c.start_time)} - {formatLocalTime(c.end_time)}</span>
+                       <span>{c.event_count} events</span>
+                     </div>
+                     <p className="text-slate-300 text-[11px] leading-snug">{c.summary}</p>
+                   </div>
+                 ))}
+               </div>
             </div>
           )}
         </div>

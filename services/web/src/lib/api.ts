@@ -21,6 +21,20 @@ export function extractErrorMessage(err: any, fallbackMsg: string = 'An unexpect
   return fallbackMsg;
 }
 
+export function formatLocalTime(isoString: string | Date | undefined | null): string {
+  if (!isoString) return '--:--:--';
+  const str = String(isoString);
+  // If string has date format without timezone offset (no Z or +/-), append Z so browser knows it is UTC
+  const utcFormatted = (typeof isoString === 'string' && !str.includes('Z') && !str.match(/[+-]\d{2}:\d{2}$/))
+    ? str.replace(' ', 'T') + 'Z'
+    : isoString;
+  try {
+    return new Date(utcFormatted).toLocaleTimeString();
+  } catch {
+    return String(isoString);
+  }
+}
+
 async function handleResponse<T>(res: Response, fallbackMsg: string): Promise<T> {
   if (!res.ok) {
     let errorText = '';
