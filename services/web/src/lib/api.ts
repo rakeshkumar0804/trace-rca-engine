@@ -2,16 +2,35 @@ import { IncidentSummary, Investigation, EvidenceItem, TimelineData, HypothesisD
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 
+export function extractErrorMessage(err: any, fallbackMsg: string = 'An unexpected error occurred.'): string {
+  if (!err) return fallbackMsg;
+  if (typeof err === 'string') return err;
+  if (typeof err.message === 'string' && err.message !== '[object Object]') return err.message;
+  if (typeof err.detail === 'string') return err.detail;
+  if (Array.isArray(err.detail)) {
+    const msgs = err.detail
+      .map((item: any) => (typeof item === 'string' ? item : item?.msg || item?.message || 'Invalid field input'))
+      .filter(Boolean);
+    if (msgs.length > 0) return msgs.join('. ');
+  }
+  if (err.error) {
+    if (typeof err.error === 'string') return err.error;
+    if (typeof err.error.message === 'string') return err.error.message;
+  }
+  if (err.statusText && typeof err.statusText === 'string') return err.statusText;
+  return fallbackMsg;
+}
+
 async function handleResponse<T>(res: Response, fallbackMsg: string): Promise<T> {
   if (!res.ok) {
-    let detail = '';
+    let errorText = '';
     try {
       const errJson = await res.json();
-      detail = errJson.detail || '';
+      errorText = extractErrorMessage(errJson, res.statusText || fallbackMsg);
     } catch {
-      detail = res.statusText;
+      errorText = res.statusText || fallbackMsg;
     }
-    throw new Error(detail || fallbackMsg);
+    throw new Error(errorText || fallbackMsg);
   }
   return res.json();
 }

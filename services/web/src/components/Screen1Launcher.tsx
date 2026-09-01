@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { IncidentSummary, Investigation } from '../types';
-import { generateIncident, startInvestigation, startDemoInvestigation } from '../lib/api';
+import { generateIncident, startInvestigation, startDemoInvestigation, extractErrorMessage } from '../lib/api';
 import { Play, Sparkles, RefreshCw, Activity, Server, Clock, AlertCircle, ShieldAlert, Cpu, Loader2 } from 'lucide-react';
 
 interface Screen1LauncherProps {
@@ -37,7 +37,7 @@ export function Screen1Launcher({
       const inv = await startInvestigation(newInc.incident_id);
       onInvestigationStarted(inv);
     } catch (err: any) {
-      setError(err.message || 'Failed to generate incident');
+      setError(extractErrorMessage(err, 'Failed to generate incident'));
     } finally {
       setGenerating(false);
     }
@@ -50,7 +50,7 @@ export function Screen1Launcher({
       const inv = await startDemoInvestigation();
       onInvestigationStarted(inv);
     } catch (err: any) {
-      setError(err.message || 'Failed to start demo incident');
+      setError(extractErrorMessage(err, 'Failed to start demo incident'));
     } finally {
       setDemoStarting(false);
     }
@@ -140,7 +140,7 @@ export function Screen1Launcher({
                 <option value="random">🎲 Random Complex Failure</option>
                 <option value="bad_deployment_db_exhaustion">🚀 Bad Deployment + DB Saturation</option>
                 <option value="dependency_failure_cascade">⚡ Downstream Dependency Cascade</option>
-                <option value="memory_leak_red_herring_deployment">🧠 Memory Leak + Red-Herring Deployment</option>
+                <option value="memory_leak_masked_deployment">🧠 Memory Leak + Red-Herring Deployment</option>
               </select>
             </div>
 

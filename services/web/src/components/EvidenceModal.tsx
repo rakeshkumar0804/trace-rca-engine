@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { EvidenceItem } from '../types';
-import { fetchEvidenceDetail } from '../lib/api';
+import { fetchEvidenceDetail, extractErrorMessage } from '../lib/api';
 import { X, CheckCircle2, AlertTriangle, Activity, Database, GitCommit, FileText, Copy, Terminal } from 'lucide-react';
 
 interface EvidenceModalProps {
@@ -25,7 +25,7 @@ export function EvidenceModal({ evidenceId, onClose }: EvidenceModalProps) {
 
     fetchEvidenceDetail(evidenceId)
       .then((data) => setEvidence(data))
-      .catch((err) => setError(err.message))
+      .catch((err) => setError(extractErrorMessage(err, 'Failed to load evidence record.')))
       .finally(() => setLoading(false));
   }, [evidenceId]);
 

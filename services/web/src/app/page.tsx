@@ -4,7 +4,8 @@ import React, { useEffect, useState, useRef } from 'react';
 import { IncidentSummary, Investigation, HypothesisData, TimelineData } from '../types';
 import { 
   fetchIncidents, startInvestigation, fetchInvestigation, 
-  fetchInvestigationHypotheses, fetchInvestigationTimeline 
+  fetchInvestigationHypotheses, fetchInvestigationTimeline,
+  extractErrorMessage 
 } from '../lib/api';
 import { Screen1Launcher } from '../components/Screen1Launcher';
 import { Screen2Investigation } from '../components/Screen2Investigation';
@@ -38,7 +39,7 @@ export default function Home() {
       setIncidents(data);
     } catch (err: any) {
       console.error('Failed to load incidents', err);
-      setErrorMessage(err.message || 'Failed to connect to TRACE backend API. Please ensure the backend server is running.');
+      setErrorMessage(extractErrorMessage(err, 'Failed to connect to TRACE backend API. Please ensure the backend server is running.'));
     } finally {
       setLoadingIncidents(false);
     }
@@ -60,7 +61,7 @@ export default function Home() {
       handleInvestigationStarted(inv);
     } catch (err: any) {
       console.error('Failed to start investigation', err);
-      setErrorMessage(err.message || 'Failed to initiate autonomous investigation.');
+      setErrorMessage(extractErrorMessage(err, 'Failed to initiate autonomous investigation.'));
     }
   };
 

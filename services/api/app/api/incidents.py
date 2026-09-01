@@ -25,6 +25,7 @@ class GenerateIncidentRequest(BaseModel):
         "bad_deployment_db_exhaustion",
         "dependency_failure_cascade",
         "memory_leak_masked_deployment",
+        "memory_leak_red_herring_deployment",
         "random",
     ] = "bad_deployment_db_exhaustion"
     seed: int | None = None
@@ -47,13 +48,15 @@ async def generate_incident(
     session: AsyncSession = Depends(get_fastapi_session),
 ) -> IncidentPublicSummary:
     """Generates a new deterministic or random incident and ingests telemetry into the database."""
-    # Resolve incident type
+    # Resolve incident type with alias normalization
     if req.incident_type == "random":
         chosen_type = random.choice([
             IncidentType.BAD_DEPLOYMENT_DB_EXHAUSTION.value,
             IncidentType.DEPENDENCY_FAILURE_CASCADE.value,
             IncidentType.MEMORY_LEAK_MASKED_DEPLOYMENT.value,
         ])
+    elif req.incident_type in ("memory_leak_red_herring_deployment", "memory_leak_masked_deployment"):
+        chosen_type = IncidentType.MEMORY_LEAK_MASKED_DEPLOYMENT.value
     else:
         chosen_type = req.incident_type
 
