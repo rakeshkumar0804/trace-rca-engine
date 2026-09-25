@@ -1,6 +1,6 @@
 """Add investigations and investigation_steps tables with LLM provider metadata
 
-Revision ID: 0003_investigations_and_provider_fields
+Revision ID: 0003_inv_provider_fields
 Revises: 0002_vector_dim_384
 Create Date: 2026-09-25 20:45:00.000000
 
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-# revision identifiers, used by Alembic.
-revision: str = "0003_investigations_and_provider_fields"
+# revision identifiers, used by Alembic (must be <= 32 chars for PostgreSQL alembic_version)
+revision: str = "0003_inv_provider_fields"
 down_revision: Union[str, None] = "0002_vector_dim_384"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

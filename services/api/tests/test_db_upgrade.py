@@ -66,6 +66,21 @@ class TestDatabaseMigrations:
         assert "is_fallback" in inv_cols
         assert "fallback_reason" in inv_cols
 
+    def test_revision_id_does_not_exceed_postgres_32_char_limit(self, alembic_config):
+        """PostgreSQL's alembic_version.version_num is VARCHAR(32).
+        
+        Verifies every migration revision ID in the script directory is <= 32 characters.
+        """
+        cfg, _, _ = alembic_config
+        from alembic.script import ScriptDirectory
+        script_dir = ScriptDirectory.from_config(cfg)
+        
+        for rev in script_dir.walk_revisions():
+            assert len(rev.revision) <= 32, (
+                f"Migration revision ID '{rev.revision}' ({len(rev.revision)} chars) "
+                f"exceeds PostgreSQL's VARCHAR(32) limit on alembic_version.version_num."
+            )
+
     @pytest.mark.anyio
     async def test_pre_polish_schema_upgrade_preserves_historical_investigations(self, tmp_path, monkeypatch):
         """Simulates an existing deployed database created with pre-polish schema.
