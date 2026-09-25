@@ -10,7 +10,7 @@ interface Screen1LauncherProps {
   loadingIncidents: boolean;
   onRefreshIncidents: () => void;
   onStartInvestigation: (incidentId: string) => Promise<void>;
-  onInvestigationStarted: (investigation: Investigation) => void;
+  onInvestigationStarted: (investigation: Investigation, isDemoReplay?: boolean) => void;
 }
 
 export function Screen1Launcher({
@@ -36,7 +36,7 @@ export function Screen1Launcher({
       const newInc = await generateIncident(selectedType, seedVal);
       onRefreshIncidents();
       const inv = await startInvestigation(newInc.incident_id);
-      onInvestigationStarted(inv);
+      onInvestigationStarted(inv, false);
     } catch (err: any) {
       setError(extractErrorMessage(err, 'Failed to generate incident'));
     } finally {
@@ -49,7 +49,7 @@ export function Screen1Launcher({
     setError(null);
     try {
       const inv = await startDemoInvestigation();
-      onInvestigationStarted(inv);
+      onInvestigationStarted(inv, true);
     } catch (err: any) {
       setError(extractErrorMessage(err, 'Failed to start demo incident'));
     } finally {
@@ -68,7 +68,7 @@ export function Screen1Launcher({
           TRACE <span className="text-slate-500 font-light text-2xl">| Multi-Hypothesis Investigation</span>
         </h1>
         <p className="text-slate-400 text-sm max-w-3xl leading-relaxed">
-          TRACE dynamically constructs hypotheses, retrieves real multi-modal telemetry (logs, metrics, traces, database connections, and deployments), and applies deterministic falsification to discover true root causes without prompt-only hallucinations.
+          TRACE dynamically constructs hypotheses, retrieves multi-modal telemetry (logs, metrics, traces, database connections, and deployments), and applies deterministic falsification to discover true root causes without prompt-only hallucinations.
         </p>
       </div>
 
@@ -77,10 +77,13 @@ export function Screen1Launcher({
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-cyan-400" />
-            <h2 className="text-base font-semibold text-slate-100">Deterministic Evaluated Demo Scenario</h2>
+            <h2 className="text-base font-semibold text-slate-100">Verified Demo Replay (Pre-Evaluated Reference)</h2>
+            <span className="px-2 py-0.5 text-[10px] font-mono font-bold uppercase rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
+              0-Quota Replay
+            </span>
           </div>
           <p className="text-xs text-slate-400 font-mono max-w-2xl leading-relaxed">
-            Instantly boots a full microservice incident with telemetry, unindexed query regressions, and masked distractors. Evaluated through 8 autonomous state machine steps.
+            Replays a pre-computed reference investigation (<span className="text-slate-300">bad_deployment_db_exhaustion</span>, seed=1) generated with <span className="text-slate-300">MockLLMProvider</span>. Streams the 8 state transitions progressively with <strong className="text-slate-300">synthetic telemetry stored in the database and available for inspection</strong> without consuming external LLM quota.
           </p>
         </div>
 
@@ -92,12 +95,12 @@ export function Screen1Launcher({
           {demoStarting ? (
             <>
               <Loader2 className="w-4 h-4 animate-spin" />
-              <span>Launching Investigation...</span>
+              <span>Starting Demo Replay...</span>
             </>
           ) : (
             <>
               <Play className="w-4 h-4 fill-slate-950" />
-              <span>Run Demo Incident</span>
+              <span>Run Demo Replay</span>
             </>
           )}
         </button>
@@ -106,7 +109,7 @@ export function Screen1Launcher({
       {demoStarting && (
         <div className="p-3.5 rounded-xl bg-cyan-950/40 border border-cyan-800/50 text-cyan-300 text-xs font-mono flex items-center gap-2.5 animate-pulse">
           <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-          <span>Warming up cloud backend & generating synthetic telemetry (takes ~15-25s on cloud instances)...</span>
+          <span>Loading verified reference telemetry and starting progressive step replay...</span>
         </div>
       )}
 
@@ -122,11 +125,16 @@ export function Screen1Launcher({
         {/* Synthetic Generator Card */}
         <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-6 shadow-xl">
           <div className="space-y-1">
-            <h2 className="text-sm font-semibold text-slate-200 uppercase tracking-wider font-mono">
-              Generate New Incident
-            </h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-slate-200 uppercase tracking-wider font-mono">
+                Generate Custom Incident
+              </h2>
+              <span className="px-2 py-0.5 text-[10px] font-mono font-bold uppercase rounded bg-slate-800 text-slate-400 border border-slate-700">
+                Live Run
+              </span>
+            </div>
             <p className="text-xs text-slate-400 font-mono">
-              Inject synthetic failures into simulated e-commerce microservices.
+              Inject synthetic telemetry into simulated microservices and run the live investigation pipeline.
             </p>
           </div>
 
@@ -166,12 +174,12 @@ export function Screen1Launcher({
               {generating ? (
                 <>
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span>Generating Telemetry...</span>
+                  <span>Synthesizing & Running...</span>
                 </>
               ) : (
                 <>
                   <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Synthesize & Investigate</span>
+                  <span>Synthesize & Run Live Investigation</span>
                 </>
               )}
             </button>

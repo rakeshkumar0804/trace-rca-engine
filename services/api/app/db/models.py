@@ -271,6 +271,10 @@ class InvestigationORM(Base):
     started_at = Column(DateTime(timezone=True), nullable=False, index=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     rca_narrative = Column(Text, nullable=True)
+    llm_provider = Column(String(50), nullable=True, default="mock")
+    llm_model = Column(String(100), nullable=True, default="Mock Provider (Offline Deterministic Rules)")
+    is_fallback = Column(Boolean, nullable=True, default=False)
+    fallback_reason = Column(Text, nullable=True)
 
     __table_args__ = (
         Index("idx_investigations_incident_time", "incident_id", "started_at"),

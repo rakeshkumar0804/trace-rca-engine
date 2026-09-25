@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { EvidenceItem } from '../types';
 import { fetchEvidenceDetail, extractErrorMessage, formatLocalTime } from '../lib/api';
 import { X, CheckCircle2, AlertTriangle, Activity, Database, GitCommit, FileText, Copy, Terminal } from 'lucide-react';
@@ -17,6 +17,21 @@ export function EvidenceModal({ evidenceId, onClose }: EvidenceModalProps) {
   const [copied, setCopied] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
 
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  // Save the currently active element when modal opens and restore it on close
+  useEffect(() => {
+    if (evidenceId) {
+      previousFocusRef.current = document.activeElement as HTMLElement | null;
+    } else if (previousFocusRef.current) {
+      previousFocusRef.current.focus();
+      previousFocusRef.current = null;
+    }
+  }, [evidenceId]);
+
+  // Load evidence details
   useEffect(() => {
     if (!evidenceId) return;
     setLoading(true);
@@ -28,6 +43,57 @@ export function EvidenceModal({ evidenceId, onClose }: EvidenceModalProps) {
       .catch((err) => setError(extractErrorMessage(err, 'Failed to load evidence record.')))
       .finally(() => setLoading(false));
   }, [evidenceId]);
+
+  // Focus management: initial focus & focus trap + Escape key listener
+  useEffect(() => {
+    if (!evidenceId) return;
+
+    // Initial focus to close button
+    const timer = setTimeout(() => {
+      closeButtonRef.current?.focus();
+    }, 50);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+        return;
+      }
+
+      if (e.key === 'Tab' && dialogRef.current) {
+        const focusableElements = dialogRef.current.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusableElements.length === 0) return;
+
+        const firstElement = focusableElements[0];
+        const lastElement = focusableElements[focusableElements.length - 1];
+
+        if (e.shiftKey) {
+          // Shift + Tab
+          if (document.activeElement === firstElement) {
+            e.preventDefault();
+            lastElement.focus();
+          }
+        } else {
+          // Tab
+          if (document.activeElement === lastElement) {
+            e.preventDefault();
+            firstElement.focus();
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('keydown', handleKeyDown);
+      if (previousFocusRef.current) {
+        previousFocusRef.current.focus();
+      }
+    };
+  }, [evidenceId, onClose]);
 
   if (!evidenceId) return null;
 
@@ -51,9 +117,17 @@ export function EvidenceModal({ evidenceId, onClose }: EvidenceModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-150">
-      <div 
-        className="relative w-full max-w-2xl bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-150 motion-reduce:animate-none"
+      onClick={onClose}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="evidence-modal-title"
+        aria-describedby="evidence-modal-desc"
+        className="relative w-full max-w-2xl bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] motion-reduce:transition-none"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -62,28 +136,35 @@ export function EvidenceModal({ evidenceId, onClose }: EvidenceModalProps) {
             {evidence ? getSourceIcon(evidence.evidence_type) : <Activity className="w-5 h-5 text-cyan-400 animate-spin" />}
             <div>
               <div className="flex items-center gap-2">
-                <h3 className="text-sm font-semibold text-slate-200">Evidence Record</h3>
+                <h3 id="evidence-modal-title" className="text-sm font-semibold text-slate-200">
+                  Telemetry Evidence Record
+                </h3>
                 {evidence && (
                   <span className="px-2 py-0.5 text-xs font-mono font-medium uppercase rounded bg-slate-800 text-slate-300 border border-slate-700">
                     {evidence.evidence_type}
                   </span>
                 )}
               </div>
-              <p className="text-xs font-mono text-slate-400 truncate max-w-md">{evidenceId}</p>
+              <p id="evidence-modal-desc" className="text-xs font-mono text-slate-400 truncate max-w-md">
+                {evidenceId}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <button
               onClick={handleCopy}
-              className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors text-xs flex items-center gap-1.5 border border-slate-800"
-              title="Copy JSON"
+              className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors text-xs flex items-center gap-1.5 border border-slate-800 cursor-pointer"
+              title="Copy JSON record"
+              aria-label="Copy JSON record"
             >
               {copied ? <CheckCircle2 className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
               <span>{copied ? 'Copied' : 'Copy'}</span>
             </button>
             <button
+              ref={closeButtonRef}
               onClick={onClose}
-              className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors"
+              className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+              aria-label="Close dialog"
             >
               <X className="w-5 h-5" />
             </button>
@@ -183,7 +264,7 @@ export function EvidenceModal({ evidenceId, onClose }: EvidenceModalProps) {
               <div className="pt-2">
                 <button
                   onClick={() => setShowRaw(!showRaw)}
-                  className="text-xs font-mono text-slate-400 hover:text-cyan-400 transition-colors"
+                  className="text-xs font-mono text-slate-400 hover:text-cyan-400 transition-colors cursor-pointer"
                 >
                   {showRaw ? '▼ Hide Full JSON Payload' : '▶ Show Full JSON Payload'}
                 </button>
@@ -201,7 +282,7 @@ export function EvidenceModal({ evidenceId, onClose }: EvidenceModalProps) {
         <div className="px-6 py-3 border-t border-slate-800 bg-slate-950/40 text-right">
           <button
             onClick={onClose}
-            className="px-4 py-1.5 text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg transition-colors"
+            className="px-4 py-1.5 text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg transition-colors cursor-pointer"
           >
             Close
           </button>

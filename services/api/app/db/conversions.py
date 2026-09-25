@@ -561,6 +561,10 @@ def investigation_to_orm(
         started_at=_ensure_utc(inv.started_at),
         completed_at=_ensure_utc(inv.completed_at),
         rca_narrative=inv.rca_narrative,
+        llm_provider=getattr(inv, "llm_provider", "mock") or "mock",
+        llm_model=getattr(inv, "llm_model", "Mock Provider (Offline Deterministic Rules)") or "Mock Provider (Offline Deterministic Rules)",
+        is_fallback=getattr(inv, "is_fallback", False) if getattr(inv, "is_fallback", None) is not None else False,
+        fallback_reason=getattr(inv, "fallback_reason", None),
     )
 
 
@@ -578,5 +582,9 @@ def orm_to_investigation(
         started_at=_ensure_utc(orm.started_at),
         completed_at=_ensure_utc(orm.completed_at),
         rca_narrative=orm.rca_narrative,
+        llm_provider=getattr(orm, "llm_provider", None) or "unknown",
+        llm_model=getattr(orm, "llm_model", None) or "Unknown (historical run)",
+        is_fallback=getattr(orm, "is_fallback", False) if getattr(orm, "is_fallback", None) is not None else False,
+        fallback_reason=getattr(orm, "fallback_reason", None),
     )
 

@@ -26,6 +26,8 @@ from app.db.models import (
     ServiceDependencyORM,
     ServiceORM,
     TraceSpanORM,
+    InvestigationORM,
+    InvestigationStepORM,
 )
 
 config = context.config
@@ -37,6 +39,9 @@ target_metadata = Base.metadata
 
 
 def get_url():
+    cfg_url = config.get_main_option("sqlalchemy.url")
+    if cfg_url and cfg_url.strip():
+        return cfg_url.strip()
     return get_database_url()
 
 
@@ -80,7 +85,18 @@ async def run_async_migrations() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-    asyncio.run(run_async_migrations())
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(asyncio.run, run_async_migrations())
+            future.result()
+    else:
+        asyncio.run(run_async_migrations())
 
 
 if context.is_offline_mode():

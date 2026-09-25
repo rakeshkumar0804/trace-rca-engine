@@ -16,6 +16,7 @@ class InvestigationState(str, Enum):
     RCA_GENERATED = "rca_generated"
     INCONCLUSIVE = "inconclusive"
     FAILED = "failed"
+    INTERRUPTED = "interrupted"
 
 
 InvestigationStepDetailPrimitive = str | int | float | bool
@@ -57,3 +58,7 @@ class Investigation(BaseModel):
     started_at: datetime
     completed_at: datetime | None = None
     rca_narrative: str | None = None
+    llm_provider: str = "mock"
+    llm_model: str = "Mock Provider (Offline Deterministic Rules)"
+    is_fallback: bool = False
+    fallback_reason: str | None = None

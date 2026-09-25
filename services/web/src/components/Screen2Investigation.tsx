@@ -12,6 +12,7 @@ interface Screen2InvestigationProps {
   investigation: Investigation;
   hypotheses: HypothesisData[];
   timeline: TimelineData | null;
+  isDemoReplay?: boolean;
   onBackToLauncher: () => void;
   onOpenEvidence: (evidenceId: string) => void;
 }
@@ -20,6 +21,7 @@ export function Screen2Investigation({
   investigation,
   hypotheses,
   timeline,
+  isDemoReplay = false,
   onBackToLauncher,
   onOpenEvidence,
 }: Screen2InvestigationProps) {
@@ -55,7 +57,7 @@ export function Screen2Investigation({
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-xl font-bold text-slate-100">Active Investigation</h1>
               <span className={`px-2.5 py-0.5 text-xs font-mono font-bold rounded-full border flex items-center gap-1.5 ${
                 isRunning ? 'bg-cyan-950/80 text-cyan-300 border-cyan-700 animate-pulse' :
@@ -65,6 +67,19 @@ export function Screen2Investigation({
                 {isRunning && <Activity className="w-3.5 h-3.5 animate-spin" />}
                 <span>{investigation.final_state.toUpperCase()}</span>
               </span>
+              {investigation.llm_provider === 'gemini' ? (
+                <span className="px-2.5 py-0.5 text-[11px] font-mono font-medium rounded-full border bg-emerald-950 text-emerald-300 border-emerald-800">
+                  🤖 LIVE GEMINI: {investigation.llm_model || 'gemini-2.5-flash'}
+                </span>
+              ) : investigation.llm_provider === 'mock' ? (
+                <span className="px-2.5 py-0.5 text-[11px] font-mono font-medium rounded-full border bg-slate-900 text-slate-300 border-slate-700">
+                  ⚙️ OFFLINE MOCK PROVIDER
+                </span>
+              ) : (
+                <span className="px-2.5 py-0.5 text-[11px] font-mono font-medium rounded-full border bg-slate-950 text-slate-400 border-slate-800">
+                  📜 {investigation.llm_model || 'Unknown (historical run)'}
+                </span>
+              )}
             </div>
             <p className="text-xs font-mono text-slate-400 mt-0.5">
               ID: {investigation.investigation_id} | Started: {formatLocalTime(investigation.started_at)}
@@ -100,7 +115,8 @@ export function Screen2Investigation({
             </div>
             {isRunning && (
               <span className="text-xs font-mono text-cyan-400 flex items-center gap-1.5 animate-pulse">
-                <span className="w-2 h-2 rounded-full bg-cyan-400" /> Live Agent Reasoning
+                <span className="w-2 h-2 rounded-full bg-cyan-400" />
+                {isDemoReplay ? 'Replaying Verified Investigation' : 'Autonomous Pipeline Execution'}
               </span>
             )}
           </div>
@@ -174,7 +190,9 @@ export function Screen2Investigation({
                                       {isDeterministic ? '⚡ TREND-CHECK' : '🤖 LLM'}
                                     </span>
                                     <span className={`px-1.5 py-0.2 text-[10px] rounded font-bold ${
-                                      v.verdict === 'supports' ? 'text-emerald-400 bg-emerald-950/60' : 'text-rose-400 bg-rose-950/60'
+                                      v.verdict === 'supports' ? 'text-emerald-400 bg-emerald-950/60 border border-emerald-800' :
+                                      v.verdict === 'contradicts' ? 'text-rose-400 bg-rose-950/60 border border-rose-800' :
+                                      'text-amber-400 bg-amber-950/60 border border-amber-800'
                                     }`}>
                                       {v.verdict?.toUpperCase()}
                                     </span>
@@ -260,7 +278,7 @@ export function Screen2Investigation({
                       {/* Score Bar */}
                       <div className="mt-3 space-y-1">
                         <div className="flex items-center justify-between text-[11px] font-mono">
-                          <span className="text-slate-400">Score Weight:</span>
+                          <span className="text-slate-400">Heuristic Score:</span>
                           <span className="font-bold text-slate-200">{score.toFixed(1)} / 100</span>
                         </div>
                         <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">

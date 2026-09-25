@@ -4,13 +4,14 @@ import React from 'react';
 import { Investigation, HypothesisData, EvidenceRefData, VerdictData } from '../types';
 import { 
   CheckCircle2, AlertTriangle, ShieldAlert, Brain, FileText, ArrowLeft, 
-  HelpCircle, Sparkles, ExternalLink, ChevronRight, Activity, Zap, Layers,
-  Database, GitCommit, Bell, BarChart3, Terminal
+  Sparkles, ExternalLink, Activity, Layers, Database, GitCommit, Bell, BarChart3, Terminal,
+  HelpCircle, XCircle, RotateCcw
 } from 'lucide-react';
 
 interface Screen3FinalRCAProps {
   investigation: Investigation;
   hypotheses: HypothesisData[];
+  isDemoReplay?: boolean;
   onBackToLauncher: () => void;
   onOpenEvidence: (evidenceId: string) => void;
 }
@@ -18,9 +19,11 @@ interface Screen3FinalRCAProps {
 export function Screen3FinalRCA({
   investigation,
   hypotheses,
+  isDemoReplay = false,
   onBackToLauncher,
   onOpenEvidence,
 }: Screen3FinalRCAProps) {
+  const isFailed = investigation.final_state === 'failed' || investigation.final_state === 'interrupted';
   const isInconclusive = investigation.final_state === 'inconclusive';
   const confidence = investigation.confidence ?? 0;
 
@@ -33,16 +36,76 @@ export function Screen3FinalRCA({
   const confLevel = getConfidenceLevel(confidence);
 
   // Extract leading hypothesis
-  const leadingHyp = hypotheses.find((h) => h.status === 'confirmed') || hypotheses[0];
+  const isRCA = investigation.final_state === 'rca_generated';
+  const leadingHyp = isRCA ? (hypotheses.find((h) => h.status === 'confirmed') || hypotheses[0]) : null;
 
-  // Partition other hypotheses into investigated vs uninvestigated
+  // Partition other hypotheses based on explicit backend fields and verdicts
   const nonConfirmedHypotheses = hypotheses.filter((h) => h !== leadingHyp);
-  const investigatedDistractors = nonConfirmedHypotheses.filter(
-    (h) => h.investigated || (h.verdicts && h.verdicts.length > 0)
-  );
-  const uninvestigatedDistractors = nonConfirmedHypotheses.filter(
+
+  // 1. Investigated & Refuted: Requires explicit contradiction verdict OR backend rejected/refuted status
+  const investigatedRefuted = nonConfirmedHypotheses.filter((h) => {
+    const isInvestigated = h.investigated || (h.verdicts && h.verdicts.length > 0);
+    const hasContradiction = h.verdicts && h.verdicts.some((v) => v.verdict === 'contradicts');
+    const isBackendRefuted = h.status === 'rejected' || h.status === 'refuted';
+    return isInvestigated && (isBackendRefuted || hasContradiction);
+  });
+
+  // 2. Investigated — Weakened or Unconfirmed: Deeply investigated, but neither confirmed nor explicitly refuted
+  const investigatedWeakenedOrUnconfirmed = nonConfirmedHypotheses.filter((h) => {
+    const isInvestigated = h.investigated || (h.verdicts && h.verdicts.length > 0);
+    return isInvestigated && !investigatedRefuted.includes(h);
+  });
+
+  // 3. Not Deeply Investigated: Did not undergo deep retrieval or self-critique
+  const notInvestigated = nonConfirmedHypotheses.filter(
     (h) => !h.investigated && (!h.verdicts || h.verdicts.length === 0)
   );
+
+  const getCandidateBadge = (h: HypothesisData) => {
+    const isInvestigated = h.investigated || (h.verdicts && h.verdicts.length > 0);
+    const hasContradiction = h.verdicts && h.verdicts.some((v) => v.verdict === 'contradicts');
+    const isBackendRefuted = h.status === 'rejected' || h.status === 'refuted';
+
+    if (h.status === 'confirmed') {
+      return { label: 'CONFIRMED', badge: 'bg-emerald-950 text-emerald-300 border-emerald-800' };
+    }
+    if (isInvestigated && (isBackendRefuted || hasContradiction)) {
+      return { label: 'REFUTED', badge: 'bg-rose-950 text-rose-300 border-rose-800' };
+    }
+    if (isInvestigated) {
+      if (h.status === 'weak' || (h.score_before != null && h.score_after != null && h.score_after < h.score_before)) {
+        return { label: 'WEAKENED', badge: 'bg-amber-950 text-amber-300 border-amber-800' };
+      }
+      return { label: 'UNCONFIRMED', badge: 'bg-slate-800 text-slate-300 border-slate-700' };
+    }
+    return { label: 'NOT DEEPLY INVESTIGATED', badge: 'bg-slate-900 text-slate-400 border-slate-800' };
+  };
+
+  const getVerdictDisplay = (verdict: string) => {
+    const v = (verdict || '').toLowerCase();
+    if (v === 'supports') {
+      return {
+        label: 'SUPPORTS',
+        textColor: 'text-emerald-400',
+        badge: 'bg-emerald-950 text-emerald-300 border-emerald-800',
+        icon: <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />,
+      };
+    }
+    if (v === 'contradicts') {
+      return {
+        label: 'CONTRADICTS',
+        textColor: 'text-rose-400',
+        badge: 'bg-rose-950 text-rose-300 border-rose-800',
+        icon: <XCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />,
+      };
+    }
+    return {
+      label: 'INCONCLUSIVE',
+      textColor: 'text-amber-400',
+      badge: 'bg-amber-950 text-amber-300 border-amber-800',
+      icon: <HelpCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />,
+    };
+  };
 
   const getSourceIcon = (sourceType: string) => {
     const s = (sourceType || '').toLowerCase();
@@ -113,22 +176,58 @@ export function Screen3FinalRCA({
         </span>
       </div>
 
-      {isInconclusive ? (
-        /* Inconclusive Honest Path */
-        <div className="p-8 rounded-2xl bg-gradient-to-b from-rose-950/30 to-slate-900 border border-rose-800/80 shadow-2xl space-y-6">
+      {isFailed ? (
+        /* Explicit Failed / Interrupted Recovery View */
+        <div className="p-8 rounded-2xl bg-gradient-to-b from-rose-950/40 via-slate-900 to-slate-950 border border-rose-800 shadow-2xl space-y-6">
           <div className="flex items-center gap-4">
-            <div className="p-3 rounded-xl bg-rose-950 border border-rose-800 text-rose-400">
+            <div className="p-3 rounded-xl bg-rose-950 border border-rose-800 text-rose-400 shadow-lg">
+              <AlertTriangle className="w-8 h-8" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2.5">
+                <h1 className="text-2xl font-bold text-rose-200">
+                  {investigation.final_state === 'interrupted' ? 'Investigation Interrupted' : 'Investigation Failed'}
+                </h1>
+                <span className="px-2.5 py-0.5 text-xs font-mono font-bold rounded bg-rose-950 text-rose-300 border border-rose-800 uppercase">
+                  {investigation.final_state}
+                </span>
+              </div>
+              <p className="text-xs font-mono text-slate-400 mt-1">
+                The execution was halted due to an infrastructure event or execution exception. This is not an evidence-based inconclusive outcome.
+              </p>
+            </div>
+          </div>
+
+          <div className="p-5 rounded-xl bg-slate-950 border border-slate-800 text-sm font-mono text-rose-300/90 leading-relaxed">
+            {investigation.rca_narrative || 'The investigation was halted before terminal synthesis. Please return to the launcher to retry.'}
+          </div>
+
+          <div className="flex items-center gap-3 pt-2">
+            <button
+              onClick={onBackToLauncher}
+              className="px-5 py-2.5 text-xs font-mono font-bold bg-rose-600 hover:bg-rose-500 text-white rounded-xl transition-all flex items-center gap-2 shadow-lg cursor-pointer"
+            >
+              <RotateCcw className="w-4 h-4" />
+              <span>Return to Launcher & Retry</span>
+            </button>
+          </div>
+        </div>
+      ) : isInconclusive ? (
+        /* Inconclusive Honest Path */
+        <div className="p-8 rounded-2xl bg-gradient-to-b from-amber-950/30 via-slate-900 to-slate-950 border border-amber-800/80 shadow-2xl space-y-6">
+          <div className="flex items-center gap-4">
+            <div className="p-3 rounded-xl bg-amber-950 border border-amber-800 text-amber-400">
               <ShieldAlert className="w-8 h-8" />
             </div>
             <div>
               <div className="flex items-center gap-2.5">
-                <h1 className="text-2xl font-bold text-rose-200">Investigation Inconclusive</h1>
-                <span className="px-2.5 py-0.5 text-xs font-mono font-bold rounded bg-rose-950 text-rose-300 border border-rose-800">
-                  CONFIDENCE &lt; 70%
+                <h1 className="text-2xl font-bold text-amber-200">Investigation Inconclusive</h1>
+                <span className="px-2.5 py-0.5 text-xs font-mono font-bold rounded bg-amber-950 text-amber-300 border border-amber-800">
+                  HEURISTIC CONFIDENCE &lt; 70%
                 </span>
               </div>
               <p className="text-xs font-mono text-slate-400 mt-1">
-                No single root-cause hypothesis cleared the required deterministic evidence validation threshold.
+                No candidate hypothesis cleared the heuristic evidence validation threshold.
               </p>
             </div>
           </div>
@@ -149,7 +248,7 @@ export function Screen3FinalRCA({
                 <span>AI Provider Limit Notice</span>
               </div>
               <p className="text-xs font-mono text-amber-200/90 leading-relaxed">
-                Upstream model quota or rate limits were encountered on this custom run. You can explore the complete, verified 100% confidence investigation on the Demo Incident without consuming API limits.
+                Upstream model quota or rate limits were encountered on this custom run. You can explore the complete, verified investigation via Demo Replay without consuming API limits.
               </p>
               <div>
                 <button
@@ -157,7 +256,7 @@ export function Screen3FinalRCA({
                   className="px-4 py-2 text-xs font-mono font-bold bg-cyan-500 hover:bg-cyan-400 text-slate-950 rounded-xl transition-all flex items-center gap-2 shadow-lg cursor-pointer"
                 >
                   <Sparkles className="w-4 h-4" />
-                  <span>Launch Pre-Cached Demo Incident</span>
+                  <span>Launch Verified Demo Replay</span>
                 </button>
               </div>
             </div>
@@ -165,36 +264,52 @@ export function Screen3FinalRCA({
 
           <div className="space-y-4">
             <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-300">
-              Evaluated Candidates & Falsification Trace:
+              Evaluated Candidates & Falsification Trace ({hypotheses.length} Total):
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {hypotheses.map((h) => (
-                <div key={h.hypothesis_id || h.title} className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs font-mono space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-slate-200">{h.title}</span>
-                    <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-rose-950 text-rose-400 border border-rose-800">
-                      {h.status.toUpperCase()} (Score: {h.final_score})
-                    </span>
-                  </div>
-                  {h.verdicts && h.verdicts.length > 0 ? (
-                    <div className="space-y-2 pt-2 border-t border-slate-900">
-                      {h.verdicts.map((v, vi) => (
-                        <div key={vi} className="p-2 rounded bg-slate-900 border border-slate-800 space-y-1">
-                          <div className="flex items-center justify-between text-[11px]">
-                            <span className="text-slate-300">Q: {v.question}</span>
-                            <span className="text-rose-400 uppercase font-bold">{v.verdict}</span>
-                          </div>
-                          <p className="text-[11px] text-slate-400">{v.reasoning}</p>
-                        </div>
-                      ))}
+              {hypotheses.map((h) => {
+                const cBadge = getCandidateBadge(h);
+                return (
+                  <div key={h.hypothesis_id || h.title} className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs font-mono space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-200">{h.title}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] text-slate-400 font-mono">
+                          Heuristic Score: {h.final_score} / 100
+                        </span>
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${cBadge.badge}`}>
+                          {cBadge.label}
+                        </span>
+                      </div>
                     </div>
-                  ) : (
-                    <p className="text-[11px] text-slate-500 italic">
-                      Eliminated on baseline scoring without deep retrieval (Score: {h.final_score}).
-                    </p>
-                  )}
-                </div>
-              ))}
+                    {h.verdicts && h.verdicts.length > 0 ? (
+                      <div className="space-y-2 pt-2 border-t border-slate-900">
+                        {h.verdicts.map((v, vi) => {
+                          const vd = getVerdictDisplay(v.verdict);
+                          return (
+                            <div key={vi} className="p-2.5 rounded bg-slate-900 border border-slate-800 space-y-1">
+                              <div className="flex items-center justify-between text-[11px]">
+                                <div className="flex items-center gap-1.5 text-slate-300 font-medium">
+                                  {vd.icon}
+                                  <span>Q: {v.question}</span>
+                                </div>
+                                <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border ${vd.badge}`}>
+                                  {vd.label}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-slate-400 leading-relaxed">{v.reasoning}</p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-slate-500 italic">
+                        Not deeply investigated during this investigation run (Score: {h.final_score}).
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -216,21 +331,46 @@ export function Screen3FinalRCA({
                 </div>
               </div>
 
-              <div className={`px-4 py-2 rounded-xl border text-xs font-mono font-bold flex items-center gap-2 ${confLevel.color} shadow-lg`}>
-                <Sparkles className="w-4 h-4" />
-                <span>{confLevel.label} ({confidence.toFixed(1)}%)</span>
+              <div className="flex flex-col items-end gap-1">
+                <div className={`px-4 py-2 rounded-xl border text-xs font-mono font-bold flex items-center gap-2 ${confLevel.color} shadow-lg`}>
+                  <Sparkles className="w-4 h-4" />
+                  <span>HEURISTIC CONFIDENCE: {confidence.toFixed(1)}%</span>
+                </div>
+                <span className="text-[10px] font-mono text-slate-400">
+                  Derived from evidence support, cross-source diversity, and penalties
+                </span>
               </div>
             </div>
 
             {/* RCA Narrative */}
             <div className="p-6 rounded-xl bg-slate-950/90 border border-slate-800 space-y-3 shadow-inner">
-              <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
-                <FileText className="w-4 h-4 text-cyan-400" />
-                <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-300">
-                  Autonomous RCA Executive Report
-                </h3>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2">
+                <div className="flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-cyan-400" />
+                  <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-300">
+                    Autonomous RCA Executive Report
+                  </h3>
+                </div>
+                <div className="flex items-center gap-2">
+                  {investigation.llm_provider === 'gemini' ? (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-medium border bg-emerald-950 text-emerald-300 border-emerald-800">
+                      🤖 LIVE MODEL: {investigation.llm_model || 'gemini-2.5-flash'}
+                    </span>
+                  ) : investigation.llm_provider === 'mock' ? (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-medium border bg-slate-900 text-slate-300 border-slate-700">
+                      ⚙️ OFFLINE MOCK PROVIDER (DETERMINISTIC RULES)
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-medium border bg-slate-950 text-slate-400 border-slate-800">
+                      📜 {investigation.llm_model || 'Unknown (historical run)'}
+                    </span>
+                  )}
+                </div>
               </div>
               {renderInteractiveNarrative(investigation.rca_narrative || 'RCA generation completed.')}
+              <p className="text-[11px] font-mono text-slate-500 pt-2 border-t border-slate-900">
+                The displayed citations link to stored telemetry records in the database available for inspection; citation existence does not by itself establish causal relevance. In Demo Replay mode, records reflect the pre-evaluated reference scenario (seed=1).
+              </p>
             </div>
           </div>
 
@@ -245,12 +385,19 @@ export function Screen3FinalRCA({
                     Supporting Causal Evidence
                   </h3>
                 </div>
-                <span className="text-xs font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 font-bold">
-                  {leadingHyp?.supporting_evidence?.length || 0} Citations
-                </span>
+                <div className="flex items-center gap-2">
+                  {leadingHyp && (
+                    <span className="text-[11px] font-mono text-slate-400">
+                      Heuristic Score: {leadingHyp.final_score} / 100
+                    </span>
+                  )}
+                  <span className="text-xs font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 font-bold">
+                    {leadingHyp?.supporting_evidence?.length || 0} Citations
+                  </span>
+                </div>
               </div>
               <p className="text-xs text-slate-400 font-mono">
-                Verified telemetry records and change events directly substantiating this failure mode (click to inspect underlying DB record):
+                Telemetry records and change events associated with this hypothesis (click to inspect stored database record):
               </p>
 
               {/* Real Supporting Evidence Cards */}
@@ -262,11 +409,11 @@ export function Screen3FinalRCA({
                       onClick={() => onOpenEvidence(ref.evidence_id)}
                       className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-cyan-600/80 transition-all cursor-pointer group shadow-sm hover:shadow-cyan-950/20"
                     >
-                      <div className="flex items-center justify-between mb-1.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
                         <div className="flex items-center gap-2">
                           <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase border flex items-center gap-1.5 ${getSourceBadgeColor(ref.evidence_type)}`}>
                             {getSourceIcon(ref.evidence_type)}
-                            <span>{ref.evidence_type}</span>
+                            <span>RAW TELEMETRY: {ref.evidence_type}</span>
                           </span>
                         </div>
                         <button
@@ -274,13 +421,13 @@ export function Screen3FinalRCA({
                             e.stopPropagation();
                             onOpenEvidence(ref.evidence_id);
                           }}
-                          className="text-[11px] font-mono text-cyan-400 group-hover:text-cyan-300 flex items-center gap-1 bg-cyan-950/40 hover:bg-cyan-950 px-2 py-0.5 rounded border border-cyan-900/60"
+                          className="text-[11px] font-mono text-cyan-400 group-hover:text-cyan-300 flex items-center gap-1 bg-cyan-950/40 hover:bg-cyan-950 px-2 py-0.5 rounded border border-cyan-900/60 cursor-pointer"
                         >
                           <span>{ref.evidence_id.slice(0, 8)}...</span>
                           <ExternalLink className="w-3 h-3" />
                         </button>
                       </div>
-                      <p className="text-xs font-mono text-slate-300 leading-relaxed group-hover:text-slate-100">
+                      <p className="text-xs font-mono text-slate-300 leading-relaxed group-hover:text-slate-100 break-words">
                         {ref.relevance_note}
                       </p>
                     </div>
@@ -295,117 +442,141 @@ export function Screen3FinalRCA({
               {/* Confirmed Hypothesis's Falsification Test Trace */}
               {leadingHyp?.verdicts && leadingHyp.verdicts.length > 0 && (
                 <div className="pt-4 border-t border-slate-800 space-y-3">
-                  <h4 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
-                    <Brain className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>Falsification Tests Passed:</span>
-                  </h4>
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                      <Brain className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Falsification & Self-Critique Inquiries:</span>
+                    </h4>
+                  </div>
+                  <p className="text-[11px] text-slate-500 font-mono">
+                    Inquiry evaluations are derived analyses testing potential contradictions against stored telemetry. They do not constitute raw observed log events.
+                  </p>
                   <div className="space-y-2">
-                    {leadingHyp.verdicts.map((v: VerdictData, vi: number) => (
-                      <div key={vi} className="p-3 rounded-lg bg-slate-950 border border-slate-800 text-xs font-mono space-y-1.5">
-                        <div className="flex items-center justify-between text-emerald-400 font-medium">
-                          <span>✓ {v.question}</span>
-                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 font-bold uppercase border border-emerald-800">
-                            {v.verdict.toUpperCase()}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-400 leading-relaxed">{v.reasoning}</p>
-                        {v.evidence_ids_cited && v.evidence_ids_cited.length > 0 && (
-                          <div className="flex items-center gap-1.5 pt-1">
-                            <span className="text-[10px] text-slate-500">Cited Evidence:</span>
-                            {v.evidence_ids_cited.map((eid, eidx) => (
-                              <button
-                                key={eidx}
-                                onClick={() => onOpenEvidence(eid)}
-                                className="text-[10px] font-mono text-cyan-400 hover:text-cyan-300 underline inline-flex items-center gap-0.5"
-                              >
-                                <span>{eid.slice(0, 8)}</span>
-                                <ExternalLink className="w-2.5 h-2.5" />
-                              </button>
-                            ))}
+                    {leadingHyp.verdicts.map((v: VerdictData, vi: number) => {
+                      const vd = getVerdictDisplay(v.verdict);
+                      const isDeterministic = v.verdict_source === 'deterministic_trend_check';
+                      return (
+                        <div key={vi} className="p-3 rounded-lg bg-slate-950 border border-slate-800 text-xs font-mono space-y-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5 font-medium text-slate-200">
+                              {vd.icon}
+                              <span className="break-words">Q: {v.question}</span>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <span className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-slate-900 text-slate-400 border border-slate-800">
+                                {isDeterministic ? '⚡ TREND-CHECK' : '🧠 DERIVED INQUIRY'}
+                              </span>
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase border ${vd.badge}`}>
+                                {vd.label}
+                              </span>
+                            </div>
                           </div>
-                        )}
-                      </div>
-                    ))}
+                          <p className="text-[11px] text-slate-400 leading-relaxed break-words">{v.reasoning}</p>
+                          {v.evidence_ids_cited && v.evidence_ids_cited.length > 0 && (
+                            <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-slate-900">
+                              <span className="text-[10px] text-slate-500">Cited Telemetry IDs:</span>
+                              {v.evidence_ids_cited.map((eid, eidx) => (
+                                <button
+                                  key={eidx}
+                                  onClick={() => onOpenEvidence(eid)}
+                                  className="text-[10px] font-mono text-cyan-400 hover:text-cyan-300 underline inline-flex items-center gap-0.5 cursor-pointer"
+                                >
+                                  <span>{eid.slice(0, 8)}</span>
+                                  <ExternalLink className="w-2.5 h-2.5" />
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
             </div>
 
-            {/* Contradicting & Ruled-Out Distractors Card */}
+            {/* Alternative Candidates & Falsification Breakdown Card */}
             <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-5 shadow-xl">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
                 <div className="flex items-center gap-2">
                   <ShieldAlert className="w-5 h-5 text-purple-400" />
                   <h3 className="text-sm font-bold uppercase tracking-wider text-slate-200">
-                    Ruled-Out Distractors & Falsification
+                    Candidate Hypotheses & Falsification Analysis
                   </h3>
                 </div>
                 <span className="text-xs font-mono px-2 py-0.5 rounded bg-purple-950 text-purple-300 border border-purple-800 font-bold">
-                  {nonConfirmedHypotheses.length} Distractors
+                  {nonConfirmedHypotheses.length} Other Candidates
                 </span>
               </div>
               <p className="text-xs text-slate-400 font-mono">
-                Competing failure modes actively evaluated and eliminated via self-critique, timeline checks, and deterministic trend differentials:
+                Overview of alternative failure modes evaluated during the investigation:
               </p>
 
-              {/* Group 1: Investigated & Falsified Distractors */}
-              {investigatedDistractors.length > 0 && (
+              {/* Group 1: Investigated & Refuted Candidates */}
+              {investigatedRefuted.length > 0 && (
                 <div className="space-y-3">
                   <div className="text-[11px] font-mono font-bold uppercase tracking-wider text-rose-400 flex items-center gap-1.5">
                     <Activity className="w-3.5 h-3.5" />
-                    <span>Investigated & Falsified Candidates ({investigatedDistractors.length}):</span>
+                    <span>Investigated & Refuted Candidates ({investigatedRefuted.length}):</span>
                   </div>
-                  {investigatedDistractors.map((h, i) => (
+                  <p className="text-[11px] text-slate-500 font-mono">
+                    Deeply investigated candidates where evidence explicitly contradicted the failure mode:
+                  </p>
+                  {investigatedRefuted.map((h, i) => (
                     <div key={i} className="p-3.5 rounded-xl bg-slate-950 border border-rose-900/40 text-xs font-mono space-y-2.5">
-                      <div className="flex items-center justify-between text-slate-300 font-medium">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-slate-300 font-medium">
                         <span className="font-bold text-slate-200">{h.title}</span>
-                        <div className="flex items-center gap-2">
-                          {h.score_before !== null && h.score_after !== null && (
-                            <span className="text-[11px] text-slate-400 font-mono">
-                              {h.score_before} → {h.score_after}
-                            </span>
-                          )}
-                          <span className="text-[10px] px-2 py-0.5 rounded bg-rose-950 text-rose-400 font-bold uppercase border border-rose-800">
-                            {h.status.toUpperCase()}
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[11px] text-slate-400 font-mono">
+                            Heuristic Score: {h.score_before !== null && h.score_after !== null ? `${h.score_before} → ${h.score_after}` : h.final_score} / 100
+                          </span>
+                          <span className="text-[10px] px-2 py-0.5 rounded bg-rose-950 text-rose-300 font-bold uppercase border border-rose-800">
+                            REFUTED
                           </span>
                         </div>
                       </div>
                       
                       {h.verdicts && h.verdicts.length > 0 && (
                         <div className="space-y-2 pt-2 border-t border-slate-900">
-                          {h.verdicts.map((v: VerdictData, vi: number) => (
-                            <div key={vi} className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
-                              <div className="flex items-center justify-between text-[11px]">
-                                <span className="text-slate-300 font-medium">Q: {v.question}</span>
-                                <span className="text-[10px] font-bold uppercase px-1.5 py-0.2 rounded bg-rose-950 text-rose-400 border border-rose-800">
-                                  {v.verdict}
-                                </span>
-                              </div>
-                              <p className="text-[11px] text-rose-300/90 leading-relaxed">
-                                {v.verdict_source === 'deterministic_trend_check' ? (
-                                  <span className="text-amber-400 font-bold mr-1">⚡ [Trend-Check Falsification]:</span>
-                                ) : (
-                                  <span className="text-purple-400 font-bold mr-1">🧠 [Self-Critique]:</span>
-                                )}
-                                {v.reasoning}
-                              </p>
-                              {v.evidence_ids_cited && v.evidence_ids_cited.length > 0 && (
-                                <div className="flex items-center gap-1.5 pt-1">
-                                  <span className="text-[10px] text-slate-500">Cited Evidence:</span>
-                                  {v.evidence_ids_cited.map((eid, eidx) => (
-                                    <button
-                                      key={eidx}
-                                      onClick={() => onOpenEvidence(eid)}
-                                      className="text-[10px] font-mono text-cyan-400 hover:text-cyan-300 underline inline-flex items-center gap-0.5"
-                                    >
-                                      <span>{eid.slice(0, 8)}</span>
-                                      <ExternalLink className="w-2.5 h-2.5" />
-                                    </button>
-                                  ))}
+                          {h.verdicts.map((v: VerdictData, vi: number) => {
+                            const vd = getVerdictDisplay(v.verdict);
+                            return (
+                              <div key={vi} className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
+                                <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                                  <div className="flex items-center gap-1.5 text-slate-300 font-medium">
+                                    {vd.icon}
+                                    <span className="break-words">Q: {v.question}</span>
+                                  </div>
+                                  <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border ${vd.badge} shrink-0`}>
+                                    {vd.label}
+                                  </span>
                                 </div>
-                              )}
-                            </div>
-                          ))}
+                                <p className="text-[11px] text-slate-300/90 leading-relaxed break-words">
+                                  {v.verdict_source === 'deterministic_trend_check' ? (
+                                    <span className="text-amber-400 font-bold mr-1">⚡ [Trend Check]:</span>
+                                  ) : (
+                                    <span className="text-purple-400 font-bold mr-1">🧠 [Self-Critique Interpretation]:</span>
+                                  )}
+                                  {v.reasoning}
+                                </p>
+                                {v.evidence_ids_cited && v.evidence_ids_cited.length > 0 && (
+                                  <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                                    <span className="text-[10px] text-slate-500">Cited Telemetry:</span>
+                                    {v.evidence_ids_cited.map((eid, eidx) => (
+                                      <button
+                                        key={eidx}
+                                        onClick={() => onOpenEvidence(eid)}
+                                        className="text-[10px] font-mono text-cyan-400 hover:text-cyan-300 underline inline-flex items-center gap-0.5 cursor-pointer"
+                                      >
+                                        <span>{eid.slice(0, 8)}</span>
+                                        <ExternalLink className="w-2.5 h-2.5" />
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                     </div>
@@ -413,26 +584,83 @@ export function Screen3FinalRCA({
                 </div>
               )}
 
-              {/* Group 2: Uninvestigated Candidate Hypotheses */}
-              {uninvestigatedDistractors.length > 0 && (
+              {/* Group 2: Investigated — Weakened or Unconfirmed Candidates */}
+              {investigatedWeakenedOrUnconfirmed.length > 0 && (
+                <div className="space-y-3 pt-2">
+                  <div className="text-[11px] font-mono font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
+                    <HelpCircle className="w-3.5 h-3.5" />
+                    <span>Investigated — Weakened or Unconfirmed Candidates ({investigatedWeakenedOrUnconfirmed.length}):</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 font-mono">
+                    Candidates evaluated with deep retrieval and self-critique inquiries where telemetry reduced score viability or was insufficient to confirm the hypothesis:
+                  </p>
+                  {investigatedWeakenedOrUnconfirmed.map((h, i) => {
+                    const cBadge = getCandidateBadge(h);
+                    return (
+                      <div key={i} className="p-3.5 rounded-xl bg-slate-950 border border-amber-900/40 text-xs font-mono space-y-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2 text-slate-300 font-medium">
+                          <span className="font-bold text-slate-200">{h.title}</span>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-[11px] text-slate-400 font-mono">
+                              Heuristic Score: {h.score_before !== null && h.score_after !== null ? `${h.score_before} → ${h.score_after}` : h.final_score} / 100
+                            </span>
+                            <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase border ${cBadge.badge}`}>
+                              {cBadge.label}
+                            </span>
+                          </div>
+                        </div>
+                        {h.verdicts && h.verdicts.length > 0 && (
+                          <div className="space-y-2 pt-2 border-t border-slate-900">
+                            {h.verdicts.map((v: VerdictData, vi: number) => {
+                              const vd = getVerdictDisplay(v.verdict);
+                              return (
+                                <div key={vi} className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
+                                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                                    <div className="flex items-center gap-1.5 text-slate-300 font-medium">
+                                      {vd.icon}
+                                      <span className="break-words">Q: {v.question}</span>
+                                    </div>
+                                    <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border ${vd.badge} shrink-0`}>
+                                      {vd.label}
+                                    </span>
+                                  </div>
+                                  <p className="text-[11px] text-slate-300/90 leading-relaxed break-words">{v.reasoning}</p>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Group 3: Not Deeply Investigated Candidates */}
+              {notInvestigated.length > 0 && (
                 <div className="space-y-3 pt-2">
                   <div className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                     <Layers className="w-3.5 h-3.5" />
-                    <span>Uninvestigated Candidates (Bounded Execution):</span>
+                    <span>Not Deeply Investigated Candidates ({notInvestigated.length}):</span>
                   </div>
                   <p className="text-[11px] text-slate-500 font-mono">
-                    Ranked below the top-3 cutoff during baseline deterministic scoring; eliminated without deep telemetry retrieval:
+                    Alternative candidates that did not undergo deep retrieval or self-critique (investigation completed upon leader confirmation or candidate ranking):
                   </p>
                   <div className="space-y-2">
-                    {uninvestigatedDistractors.map((h, i) => (
-                      <div key={i} className="p-2.5 rounded-lg bg-slate-950/70 border border-slate-800/80 text-xs font-mono flex items-center justify-between">
+                    {notInvestigated.map((h, i) => (
+                      <div key={i} className="p-3 rounded-lg bg-slate-950/70 border border-slate-800/80 text-xs font-mono flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                         <div className="space-y-0.5">
                           <span className="text-slate-300 font-medium">{h.title}</span>
                           <p className="text-[10px] text-slate-500 line-clamp-1">{h.description}</p>
                         </div>
-                        <span className="text-[11px] font-mono text-slate-400 px-2 py-0.5 rounded bg-slate-900 border border-slate-800 shrink-0 ml-3">
-                          Baseline: {h.initial_score ?? h.final_score}
-                        </span>
+                        <div className="flex items-center gap-2 shrink-0 sm:ml-3">
+                          <span className="text-[11px] font-mono text-slate-400 px-2 py-0.5 rounded bg-slate-900 border border-slate-800">
+                            Heuristic Score: {h.initial_score ?? h.final_score} / 100
+                          </span>
+                          <span className="text-[10px] font-mono font-bold text-slate-400 px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800">
+                            NOT DEEPLY INVESTIGATED
+                          </span>
+                        </div>
                       </div>
                     ))}
                   </div>

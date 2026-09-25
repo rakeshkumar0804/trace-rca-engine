@@ -1,6 +1,6 @@
 # TRACE — Telemetry Root-cause Autonomous Critique Engine
 
-[![Tests](https://img.shields.io/badge/Tests-154%2F154%20Passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-156%2F156%20Passing-brightgreen.svg)]()
 [![Benchmark](https://img.shields.io/badge/Root--Cause%20Accuracy-89.5%25%20(vs%2073.7%25%20Baseline)-blue.svg)]()
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)]()
 [![Frontend](https://img.shields.io/badge/Frontend-Next.js%2014%20(TypeScript%20%2B%20Tailwind)-black.svg)]()
@@ -25,16 +25,19 @@ TRACE solves this by separating **hypothesis generation and interpretation** (po
 
 ---
 
-## 2. Live Demo
+## 2. Live Demo & Modes
 
 - **Live Frontend**: [https://trace-rca-engine.vercel.app](https://trace-rca-engine.vercel.app)
 - **Live Backend API**: [https://trace-rca-engine.onrender.com/docs](https://trace-rca-engine.onrender.com/docs) *(Swagger UI)*
 
-### How to Run the Demo Cold:
-1. Open the frontend UI.
-2. Click **"Run Demo Incident"** on the launcher screen.
-3. Watch the autonomous state machine execute live across the 8-state investigation pipeline (retrieval, candidate ranking, falsification search, and self-critique).
-4. Inspect the generated **Executive RCA Report**, click any supporting evidence badge (`[ 7ed4d57b... ]`) to view the underlying telemetry record, and review the ruled-out distractor falsification verdicts.
+TRACE provides two distinct execution paths:
+
+1. **Demo Replay (Verified Reference Incident)**:
+   - Replays a pre-computed reference investigation (`bad_deployment_db_exhaustion`, seed=1) generated with `MockLLMProvider`.
+   - Streams the 8 state transitions progressively with **synthetic telemetry stored in the database and available for inspection**.
+   - Zero LLM API quota consumption; guaranteed 100% reliable evaluation for demonstration purposes.
+2. **Custom Incident Live Run**:
+   - Generates a new synthetic incident into the telemetry store (e.g. Memory Leak, Dependency Cascade, or DB Saturation) and runs the live orchestrator pipeline end-to-end with the active LLM provider.
 
 ---
 
@@ -127,7 +130,7 @@ One of the foundational design principles of TRACE is strictly defining where LL
 ## 6. Evidence Model & Ground Truth Isolation
 
 ### UUID-Grounded Citations
-Every claim in TRACE's final report is linked to a concrete `evidence_id` in the database. In the UI, clicking any citation pill opens the underlying raw telemetry record (timestamp, service, severity, message, metric values, database locks).
+The displayed citations link to stored telemetry records in the database (timestamp, service, severity, message, metric values, database locks). In the UI, clicking any citation pill opens the underlying stored record for inspection; citation existence does not by itself establish causal relevance.
 
 ### Strict Ground Truth Isolation
 * **Zero Runtime Leakage**: Runtime orchestrator and retrieval queries are prohibited from joining or querying the `ground_truths` table.
@@ -141,13 +144,15 @@ TRACE features a deterministic, seeded synthetic incident generator covering 3 c
 
 1. **`bad_deployment_db_exhaustion`**: A service deployment introduces an unindexed query regression that saturates connection pools and causes HTTP 504 cascades.
 2. **`dependency_failure_cascade`**: A downstream microservice suffers internal thread pool exhaustion, cascading timeouts upstream through the service topology.
-3. **`memory_leak_red_herring_deployment`**: A service suffers a steady memory leak and GC pause lockups over hours. An innocent routine configuration deployment occurs minutes before the crash, acting as an intentional red herring.
+3. **`memory_leak_masked_deployment`**: A service suffers a steady memory leak and GC pause lockups over hours. An innocent routine configuration deployment occurs minutes before the crash, acting as an intentional red herring.
 
 ---
 
 ## 8. Verified Benchmark & Evaluation
 
-Every statistic below comes from actual benchmark runs across 19 full incident scenarios evaluated against hidden ground truth:
+Every statistic below comes directly from recorded benchmark evaluation runs across **19 seeded synthetic incidents across three archetypes** (`data/benchmark/results.json`, `data/benchmark/report.md`):
+
+> **Scope Note**: This benchmark evaluates causal reasoning, distractor handling, and trend verification on seeded synthetic incident topologies with hidden ground truth. It isolates specific failure modes under controlled conditions and does not establish measured accuracy across arbitrary real-world production environments.
 
 ### Overall Benchmark Results (19 Incidents)
 
@@ -163,34 +168,34 @@ Every statistic below comes from actual benchmark runs across 19 full incident s
 | :--- | :---: | :---: | :---: | :---: |
 | `bad_deployment_db_exhaustion` | 7 | **100.0%** (7/7) | 100.0% (7/7) | +0.0% |
 | `dependency_failure_cascade` | 7 | **100.0%** (7/7) | 100.0% (7/7) | +0.0% |
-| `memory_leak_red_herring_deployment` | 5 | **60.0%** (3/5) | 0.0% (0/5) | **+60.0%** |
+| `memory_leak_masked_deployment` | 5 | **60.0%** (3/5) | 0.0% (0/5) | **+60.0%** |
 
-### The Engineering Iteration Story
-In initial benchmark runs, both TRACE and the naive LLM scored 100% on standard deployments and dependency cascades because the causal signals were unambiguous. However, on the harder **Memory Leak with Red-Herring Deployment** scenario:
-1. The naive LLM scored **0.0% (0/5)**, consistently falling for the red-herring deployment due to recency bias.
-2. TRACE initially scored **0.0% (0/5)** because the LLM self-critique prompt alone still suffered from recency bias.
-3. We engineered a **mandatory deterministic trend-differential check**: whenever a hypothesis cites a deployment as the trigger while a competing trend-based hypothesis exists, TRACE computes the linear slope of the metric time-series before and after the release.
-4. If the slope before the deployment is already positive ($m > 0$), the check refutes the deployment hypothesis. This code-driven verification boosted TRACE's root-cause accuracy on memory leaks to **60.0% (3/5)**.
+### Benchmark Analysis & Findings
+1. On standard deployment saturation and dependency cascades, both TRACE and the naive single-shot baseline achieved 100% (7/7 each) due to clear causal log/metric signatures.
+2. On the **Memory Leak with Masked Deployment** scenario (`memory_leak_masked_deployment`):
+   - The naive single-shot LLM baseline scored **0.0% (0/5)**: due to window truncation and prompt recency bias, the baseline reported "system operating normally" (4/5) or cited an unrelated low-inventory warning (1/5).
+   - TRACE achieved **60.0% (3/5)** by utilizing multi-modal retrieval and deterministic trend-differential verification (`trend_differential_check.py`) to verify that the memory growth slope preceded the deployment release.
+   - TRACE misattributed the root cause in 2 edge cases (`bench-mem-02` and `bench-mem-04`), detailed in the failure analysis below.
 
 ---
 
 ## 9. Failure Analysis — Unsolved Edge Cases
 
-Honest analysis of the two memory-leak benchmark runs where TRACE did not confirm the root cause:
+Honest analysis of the two memory-leak benchmark runs where TRACE did not confirm the true ground-truth root cause:
 
-### 1. `bench-mem-02` (Inconclusive)
-* **Outcome**: State reached `inconclusive` (Confidence: 0.0%).
-* **Root Cause**: Both the memory leak hypothesis and the distractor deployment hypothesis received strong contradiction penalties during critique. Because neither cleared the 70.0% confidence threshold, TRACE honestly returned `inconclusive` rather than guessing.
+### 1. `bench-mem-02` (Misattributed to Deployment Distractor)
+* **Outcome**: TRACE failed, predicting `"Bad deployment to checkout-service (v2.16.0)"` with **76.0% confidence** (Baseline failed, predicting `"System operating normally"` with 100.0% confidence).
+* **Analysis**: In this seed's specific metric noise and timing, the coincidental deployment candidate accumulated sufficient baseline score and survived the critique threshold, resulting in misattribution to the deployment distractor rather than the underlying memory leak.
 
-### 2. `bench-mem-04` (Misattributed)
-* **Outcome**: Incorrectly identified deployment distractor (Confidence: 100.0%).
-* **Root Cause**: The synthetic generator's memory slope in seed 4 was unusually shallow prior to the deployment window, causing the slope ratio check to register as inconclusive and allowing the deployment candidate to retain its recency score advantage.
+### 2. `bench-mem-04` (Misattributed to Downstream Dependency)
+* **Outcome**: TRACE failed, predicting `"Downstream dependency failure in payment-service"` with **86.0% confidence** (Baseline failed, predicting `"No critical root cause or failure detected"` with 95.0% confidence).
+* **Analysis**: Long stop-the-world GC pauses from the heap exhaustion triggered connection timeouts to `payment-service`. TRACE's candidate scoring ranked the payment cascade hypothesis highest, and self-critique failed to refute it, misdiagnosing the downstream symptom as the root cause.
 
 ---
 
 ## 10. Engineering Trade-offs & Scope Decisions
 
-* **Synthetic Generator vs Real Docker Microservices**: Synthetic telemetry generation allowed deterministic seeding, rapid CI test runs (<2.5 minutes for 154 tests), and 100% reproducible benchmark scenarios.
+* **Synthetic Generator vs Real Docker Microservices**: Synthetic telemetry generation allowed deterministic seeding, rapid CI test runs (<2.5 minutes for 156 tests), and 100% reproducible benchmark scenarios.
 * **Dual-Engine DB Support (PostgreSQL / SQLite)**: Native support for PostgreSQL with pgvector for production deployments, paired with a transparent fallback for local zero-dependency development.
 * **FastEmbed in-process Embeddings**: FastEmbed runs ONNX models locally in-process with cosine similarity calculation in Python, eliminating external vector database dependencies.
 
@@ -231,7 +236,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 ```bash
 cd services/api
 python -m pytest tests/ -v
-# 154 / 154 tests passing
+# 156 / 156 tests passing
 ```
 
 ---

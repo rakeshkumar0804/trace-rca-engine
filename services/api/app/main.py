@@ -12,7 +12,8 @@ from app.api.incidents import router as incidents_router
 from app.api.investigations import router as investigations_router
 from app.api.evidence import router as evidence_router
 from app.api.rate_limiter import RateLimitMiddleware
-from app.db.base import Base, get_engine
+from app.db.base import Base, get_engine, get_session_factory
+from app.orchestrator.recovery import recover_interrupted_investigations
 
 
 @asynccontextmanager
@@ -21,6 +22,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    
+    # Recover any orphaned 'running' investigations left by a previous process restart
+    factory = get_session_factory()
+    async with factory() as session:
+        await recover_interrupted_investigations(session)
+
     yield
 
 

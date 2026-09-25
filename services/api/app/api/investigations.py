@@ -5,9 +5,9 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_fastapi_session, get_session_factory
@@ -44,16 +44,38 @@ class InvestigationPublic(BaseModel):
     started_at: datetime
     completed_at: datetime | None = None
     steps: list[InvestigationStepPublic] = Field(default_factory=list)
+    run_mode: str = "autonomous_live"  # "demo_replay" or "autonomous_live"
+    llm_provider: str = "mock"  # "gemini" or "mock"
+    llm_model: str = "Mock Provider (Offline Deterministic Rules)"
+    is_fallback: bool = False
+    fallback_reason: str | None = None
 
 
-# In-memory tracking of active tasks and investigation state cache for zero-lock polling
+# In-memory tracking of active tasks and investigation state cache with bounded retention
+MAX_CACHE_ENTRIES = 100
 _running_tasks: dict[UUID, asyncio.Task] = {}
 _investigation_cache: dict[UUID, InvestigationPublic] = {}
 _hypotheses_cache: dict[UUID, list[dict[str, Any]]] = {}
+_start_lock = asyncio.Lock()
+
+
+def _put_investigation_cache(inv_id: UUID, item: InvestigationPublic) -> None:
+    """Inserts into cache while enforcing bounded retention to prevent memory bloat."""
+    if len(_investigation_cache) >= MAX_CACHE_ENTRIES:
+        # Evict oldest terminal state entry
+        for k, v in list(_investigation_cache.items()):
+            if v.final_state in ("rca_generated", "inconclusive", "failed", "interrupted"):
+                _investigation_cache.pop(k, None)
+                if len(_investigation_cache) < MAX_CACHE_ENTRIES:
+                    break
+        # If still full, pop first entry
+        if len(_investigation_cache) >= MAX_CACHE_ENTRIES:
+            _investigation_cache.pop(next(iter(_investigation_cache)), None)
+    _investigation_cache[inv_id] = item
 
 
 async def _execute_investigation_worker(incident_id: UUID, investigation_id: UUID) -> None:
-    """Background worker executing the full investigation pipeline with live DB step persistence."""
+    """Background worker executing the full investigation pipeline with persistent DB updates."""
     from app.orchestrator.error_handling import format_human_error_message
     import logging
     logger = logging.getLogger("trace.api.investigations")
@@ -89,24 +111,86 @@ async def _execute_investigation_worker(incident_id: UUID, investigation_id: UUI
                 started_at=inv.started_at,
                 completed_at=inv.completed_at,
                 steps=pub_steps,
+                run_mode="autonomous_live",
+                llm_provider=inv.llm_provider,
+                llm_model=inv.llm_model,
+                is_fallback=inv.is_fallback,
+                fallback_reason=inv.fallback_reason,
             )
-            _investigation_cache[investigation_id] = completed_pub
+            _put_investigation_cache(investigation_id, completed_pub)
+
+        except asyncio.CancelledError:
+            logger.warning(f"Investigation task {investigation_id} was cancelled.")
+            now = datetime.now(timezone.utc)
+            try:
+                inv_stmt = select(InvestigationORM).where(InvestigationORM.investigation_id == investigation_id)
+                inv_orm = (await session.execute(inv_stmt)).scalar_one_or_none()
+                if inv_orm and inv_orm.final_state == "running":
+                    inv_orm.final_state = InvestigationState.INTERRUPTED.value
+                    inv_orm.completed_at = now
+                    inv_orm.rca_narrative = "Investigation was interrupted before completion."
+
+                    cnt_stmt = select(func.count()).select_from(InvestigationStepORM).where(InvestigationStepORM.investigation_id == investigation_id)
+                    cnt = (await session.execute(cnt_stmt)).scalar() or 0
+
+                    fail_step = InvestigationStepORM(
+                        investigation_id=investigation_id,
+                        step_number=cnt + 1,
+                        state=InvestigationState.INTERRUPTED.value,
+                        timestamp=now,
+                        summary="Investigation task was cancelled or interrupted.",
+                        details={"error": "task_cancelled", "recoverable": True},
+                    )
+                    session.add(fail_step)
+                    await session.commit()
+            except Exception as dberr:
+                logger.error(f"Failed to persist task cancellation for {investigation_id}: {dberr}")
+            raise
 
         except Exception as ex:
             logger.exception(f"Investigation execution error for {investigation_id}: {ex}")
             friendly_msg = format_human_error_message(ex)
+            now = datetime.now(timezone.utc)
+            try:
+                inv_stmt = select(InvestigationORM).where(InvestigationORM.investigation_id == investigation_id)
+                inv_orm = (await session.execute(inv_stmt)).scalar_one_or_none()
+                if inv_orm and inv_orm.final_state == "running":
+                    inv_orm.final_state = InvestigationState.FAILED.value
+                    inv_orm.completed_at = now
+                    inv_orm.rca_narrative = friendly_msg
+
+                    cnt_stmt = select(func.count()).select_from(InvestigationStepORM).where(InvestigationStepORM.investigation_id == investigation_id)
+                    cnt = (await session.execute(cnt_stmt)).scalar() or 0
+
+                    fail_step = InvestigationStepORM(
+                        investigation_id=investigation_id,
+                        step_number=cnt + 1,
+                        state=InvestigationState.FAILED.value,
+                        timestamp=now,
+                        summary=f"Investigation failed: {friendly_msg}",
+                        details={"error": str(ex), "recoverable": True},
+                    )
+                    session.add(fail_step)
+                    await session.commit()
+            except Exception as dberr:
+                logger.error(f"Failed to persist error state for {investigation_id}: {dberr}")
+
             # Mark error in cache with clean user-facing explanation
             if investigation_id in _investigation_cache:
                 cached = _investigation_cache[investigation_id]
-                _investigation_cache[investigation_id] = InvestigationPublic(
-                    investigation_id=cached.investigation_id,
-                    incident_id=cached.incident_id,
-                    final_state="inconclusive",
-                    confidence=0.0,
-                    rca_narrative=friendly_msg,
-                    started_at=cached.started_at,
-                    completed_at=datetime.now(timezone.utc),
-                    steps=cached.steps,
+                _put_investigation_cache(
+                    investigation_id,
+                    InvestigationPublic(
+                        investigation_id=cached.investigation_id,
+                        incident_id=cached.incident_id,
+                        final_state=InvestigationState.FAILED.value,
+                        confidence=0.0,
+                        rca_narrative=friendly_msg,
+                        started_at=cached.started_at,
+                        completed_at=now,
+                        steps=cached.steps,
+                        run_mode=cached.run_mode,
+                    )
                 )
         finally:
             _running_tasks.pop(investigation_id, None)
@@ -124,47 +208,70 @@ async def start_investigation(
     if not inc:
         raise HTTPException(status_code=404, detail="Incident not found")
 
-    # Check if already running or completed
-    inv_stmt = (
-        select(InvestigationORM)
-        .where(InvestigationORM.incident_id == req.incident_id)
-        .order_by(InvestigationORM.started_at.desc())
-    )
-    existing_inv = (await session.execute(inv_stmt)).scalars().first()
+    async with _start_lock:
+        # Check if there is already an active running investigation for this incident (prevent duplicate runs)
+        running_stmt = (
+            select(InvestigationORM)
+            .where(
+                InvestigationORM.incident_id == req.incident_id,
+                InvestigationORM.final_state == "running",
+            )
+            .order_by(InvestigationORM.started_at.desc())
+        )
+        running_inv = (await session.execute(running_stmt)).scalars().first()
+        if running_inv:
+            # If task is actively tracked in memory and not done, return the active instance
+            if running_inv.investigation_id in _running_tasks and not _running_tasks[running_inv.investigation_id].done():
+                return await get_investigation_detail(running_inv.investigation_id, session)
+            # If task was lost (e.g. killed without clean shutdown), transition old to interrupted before starting new
+            running_inv.final_state = InvestigationState.INTERRUPTED.value
+            running_inv.completed_at = datetime.now(timezone.utc)
+            running_inv.rca_narrative = "Previous investigation session was interrupted."
+            await session.commit()
 
-    if existing_inv and existing_inv.final_state == InvestigationState.RCA_GENERATED.value:
-        # Return existing completed investigation
-        return await get_investigation_detail(existing_inv.investigation_id, session)
+        # Check if completed investigation already exists
+        inv_stmt = (
+            select(InvestigationORM)
+            .where(
+                InvestigationORM.incident_id == req.incident_id,
+                InvestigationORM.final_state == InvestigationState.RCA_GENERATED.value,
+            )
+            .order_by(InvestigationORM.started_at.desc())
+        )
+        existing_inv = (await session.execute(inv_stmt)).scalars().first()
+        if existing_inv:
+            return await get_investigation_detail(existing_inv.investigation_id, session)
 
-    inv_id = uuid4()
-    started_at = datetime.now(timezone.utc)
+        inv_id = uuid4()
+        started_at = datetime.now(timezone.utc)
 
-    # Create initial investigation record
-    initial_inv = InvestigationORM(
-        investigation_id=inv_id,
-        incident_id=req.incident_id,
-        final_state="running",
-        confidence=0.0,
-        started_at=started_at,
-    )
-    session.add(initial_inv)
-    await session.commit()
+        # Create initial investigation record
+        initial_inv = InvestigationORM(
+            investigation_id=inv_id,
+            incident_id=req.incident_id,
+            final_state="running",
+            confidence=0.0,
+            started_at=started_at,
+        )
+        session.add(initial_inv)
+        await session.commit()
 
-    initial_pub = InvestigationPublic(
-        investigation_id=inv_id,
-        incident_id=req.incident_id,
-        final_state="running",
-        confidence=0.0,
-        started_at=started_at,
-        steps=[],
-    )
-    _investigation_cache[inv_id] = initial_pub
+        initial_pub = InvestigationPublic(
+            investigation_id=inv_id,
+            incident_id=req.incident_id,
+            final_state="running",
+            confidence=0.0,
+            started_at=started_at,
+            steps=[],
+            run_mode="autonomous_live",
+        )
+        _put_investigation_cache(inv_id, initial_pub)
 
-    # Launch background task
-    task = asyncio.create_task(_execute_investigation_worker(req.incident_id, inv_id))
-    _running_tasks[inv_id] = task
+        # Launch background task
+        task = asyncio.create_task(_execute_investigation_worker(req.incident_id, inv_id))
+        _running_tasks[inv_id] = task
 
-    return initial_pub
+        return initial_pub
 
 
 @router.get("/{investigation_id}", response_model=InvestigationPublic)
@@ -172,11 +279,11 @@ async def get_investigation_detail(
     investigation_id: UUID,
     session: AsyncSession = Depends(get_fastapi_session),
 ) -> InvestigationPublic:
-    """Fetches full investigation status and steps so far for polling."""
+    """Fetches full investigation status and steps so far for polling and refresh recovery."""
     # Check cache first for completed investigations
     if investigation_id in _investigation_cache:
         cached = _investigation_cache[investigation_id]
-        if cached.final_state in ("rca_generated", "inconclusive"):
+        if cached.final_state in ("rca_generated", "inconclusive", "failed", "interrupted"):
             return cached
 
     inv_stmt = select(InvestigationORM).where(InvestigationORM.investigation_id == investigation_id)
@@ -186,12 +293,37 @@ async def get_investigation_detail(
             return _investigation_cache[investigation_id]
         raise HTTPException(status_code=404, detail="Investigation not found")
 
+    # Fetch incident to determine run_mode reliably from persisted data
+    inc_stmt = select(IncidentORM).where(IncidentORM.incident_id == inv.incident_id)
+    inc = (await session.execute(inc_stmt)).scalar_one_or_none()
+    
+    from app.orchestrator.demo_reference import DEMO_SPEC, _cached_reference_incident_id
+    is_demo = False
+    if _cached_reference_incident_id and inv.incident_id == _cached_reference_incident_id:
+        is_demo = True
+    elif inc and (
+        getattr(inc, "source", None) == "demo"
+        or "golden demo" in (getattr(inc, "description", "") or "").lower()
+        or (getattr(inc, "description", "") and "demo-reference-golden" in getattr(inc, "description", ""))
+    ):
+        is_demo = True
+
     steps_stmt = (
         select(InvestigationStepORM)
         .where(InvestigationStepORM.investigation_id == investigation_id)
         .order_by(InvestigationStepORM.step_number.asc())
     )
     steps = (await session.execute(steps_stmt)).scalars().all()
+
+    # Extract provider info from step details if present
+    init_step = next((s for s in steps if s.step_number == 1 or s.state == "incident_detected"), None)
+    init_details = init_step.details if init_step and init_step.details else {}
+    default_provider = "mock" if is_demo else "unknown"
+    default_model = "Mock Provider (Offline Deterministic Rules)" if is_demo else "Unknown (historical run)"
+    persisted_provider = getattr(inv, "llm_provider", None) or init_details.get("llm_provider") or default_provider
+    persisted_model = getattr(inv, "llm_model", None) or init_details.get("llm_model") or default_model
+    persisted_fallback = getattr(inv, "is_fallback", None) if getattr(inv, "is_fallback", None) is not None else bool(init_details.get("is_fallback", is_demo or persisted_provider == "mock"))
+    persisted_fallback_reason = getattr(inv, "fallback_reason", None) or init_details.get("fallback_reason")
 
     inv_pub = InvestigationPublic(
         investigation_id=inv.investigation_id,
@@ -212,8 +344,13 @@ async def get_investigation_detail(
             )
             for s in steps
         ],
+        run_mode="demo_replay" if is_demo else "autonomous_live",
+        llm_provider=persisted_provider,
+        llm_model=persisted_model,
+        is_fallback=persisted_fallback,
+        fallback_reason=persisted_fallback_reason,
     )
-    _investigation_cache[investigation_id] = inv_pub
+    _put_investigation_cache(investigation_id, inv_pub)
     return inv_pub
 
 
@@ -322,60 +459,61 @@ async def start_demo_investigation(
     refresh: bool = False,
     session: AsyncSession = Depends(get_fastapi_session),
 ) -> InvestigationPublic:
-    """Launches the verified demo investigation.
-    
-    Replays the pre-computed golden reference investigation progressively over the live
-    polling UX so viewers experience the full autonomous state machine without consuming
-    external LLM API quota or suffering 429 rate limit failures.
-    
-    Pass refresh=true to force a real live LLM pipeline execution.
-    """
+    """Launches the verified demo investigation with atomic duplicate run protection."""
     from app.orchestrator.demo_reference import get_or_generate_demo_reference, replay_demo_investigation
 
     if refresh:
         inc_id, ref_inv = await get_or_generate_demo_reference(session, force_refresh=True)
         return await start_investigation(RunInvestigationRequest(incident_id=inc_id), session)
 
-    # 1. Get or ensure the cached reference investigation is available in memory/DB
-    inc_id, ref_inv = await get_or_generate_demo_reference(session, force_refresh=False)
+    async with _start_lock:
+        # 1. Get or ensure the cached reference investigation is available in memory/DB
+        inc_id, ref_inv = await get_or_generate_demo_reference(session, force_refresh=False)
 
-    # 2. Allocate a fresh unique investigation ID for this user demo session
-    new_inv_id = uuid4()
-    started_at = datetime.now(timezone.utc)
+        # Check if an active demo investigation is already running in background (prevent duplicate runs)
+        for tid, task in list(_running_tasks.items()):
+            if not task.done() and tid in _investigation_cache and _investigation_cache[tid].final_state == "running":
+                if _investigation_cache[tid].incident_id == inc_id:
+                    return _investigation_cache[tid]
 
-    # Create initial investigation record in DB
-    initial_inv = InvestigationORM(
-        investigation_id=new_inv_id,
-        incident_id=inc_id,
-        final_state="running",
-        confidence=0.0,
-        started_at=started_at,
-    )
-    session.add(initial_inv)
-    await session.commit()
+        # 2. Allocate a fresh unique investigation ID for this user demo session
+        new_inv_id = uuid4()
+        started_at = datetime.now(timezone.utc)
 
-    initial_pub = InvestigationPublic(
-        investigation_id=new_inv_id,
-        incident_id=inc_id,
-        final_state="running",
-        confidence=0.0,
-        started_at=started_at,
-        steps=[],
-    )
-    _investigation_cache[new_inv_id] = initial_pub
-
-    # 3. Launch progressive replay in background task
-    factory = get_session_factory()
-    task = asyncio.create_task(
-        replay_demo_investigation(
-            target_investigation_id=new_inv_id,
+        # Create initial investigation record in DB
+        initial_inv = InvestigationORM(
+            investigation_id=new_inv_id,
             incident_id=inc_id,
-            ref_investigation=ref_inv,
-            session_factory=factory,
-            investigation_cache=_investigation_cache,
-            step_delay_seconds=0.75,
+            final_state="running",
+            confidence=0.0,
+            started_at=started_at,
         )
-    )
-    _running_tasks[new_inv_id] = task
+        session.add(initial_inv)
+        await session.commit()
 
-    return initial_pub
+        initial_pub = InvestigationPublic(
+            investigation_id=new_inv_id,
+            incident_id=inc_id,
+            final_state="running",
+            confidence=0.0,
+            started_at=started_at,
+            steps=[],
+            run_mode="demo_replay",
+        )
+        _put_investigation_cache(new_inv_id, initial_pub)
+
+        # 3. Launch progressive replay in background task
+        factory = get_session_factory()
+        task = asyncio.create_task(
+            replay_demo_investigation(
+                target_investigation_id=new_inv_id,
+                incident_id=inc_id,
+                ref_investigation=ref_inv,
+                session_factory=factory,
+                investigation_cache=_investigation_cache,
+                step_delay_seconds=0.75,
+            )
+        )
+        _running_tasks[new_inv_id] = task
+
+        return initial_pub

@@ -27,6 +27,11 @@ T = TypeVar("T", bound=BaseModel)
 class LLMProvider(ABC):
     """Abstract interface for structured LLM interactions across the investigation engine."""
 
+    provider_name: str = "llm"
+    model_name: str = "unknown"
+    is_fallback: bool = False
+    fallback_reason: str | None = None
+
     @abstractmethod
     async def generate_structured(
         self,
@@ -45,9 +50,19 @@ class MockLLMProvider(LLMProvider):
     Produces grounded, schema-valid structured responses without network calls or external APIs.
     """
 
-    def __init__(self, override_responses: dict[type[BaseModel], BaseModel] | None = None):
+    provider_name: str = "mock"
+    model_name: str = "Mock Provider (Offline Deterministic Rules)"
+
+    def __init__(
+        self,
+        override_responses: dict[type[BaseModel], BaseModel] | None = None,
+        fallback_reason: str | None = None,
+        is_fallback: bool = False,
+    ):
         self.override_responses = override_responses or {}
         self.recorded_prompts: list[str] = []
+        self.fallback_reason = fallback_reason
+        self.is_fallback = is_fallback or (fallback_reason is not None)
 
     async def generate_structured(
         self,
@@ -234,20 +249,24 @@ class MockLLMProvider(LLMProvider):
 class GeminiProvider(LLMProvider):
     """Production LLM provider using Google Gemini API with native JSON schema enforcement."""
 
+    provider_name: str = "gemini"
+
     def __init__(
         self,
         api_key: str | None = None,
-        model_name: str = "gemini-3.5-flash-lite",
+        model_name: str = "gemini-2.5-flash",
     ):
         self.api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         self.model_name = os.getenv("GEMINI_MODEL", model_name)
+        self.is_fallback = False
+        self.fallback_reason = None
         self._client = None
 
         if self.api_key:
             try:
                 from google import genai
                 self._client = genai.Client(api_key=self.api_key)
-            except Exception as e:
+            except Exception:
                 pass
 
     async def generate_structured(
@@ -324,13 +343,19 @@ class GeminiProvider(LLMProvider):
 
 
 def get_llm_provider() -> LLMProvider:
-    """Factory returning GeminiProvider if API key is configured, otherwise MockLLMProvider."""
+    """Factory returning GeminiProvider if API key is configured, otherwise MockLLMProvider with explicit fallback reason."""
     provider_name = os.getenv("LLM_PROVIDER", "").lower()
     if provider_name == "mock":
-        return MockLLMProvider()
+        return MockLLMProvider(
+            fallback_reason="Explicit LLM_PROVIDER=mock configuration",
+            is_fallback=True,
+        )
 
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if api_key:
         return GeminiProvider(api_key=api_key)
 
-    return MockLLMProvider()
+    return MockLLMProvider(
+        fallback_reason="No GEMINI_API_KEY configured (offline mock provider)",
+        is_fallback=True,
+    )

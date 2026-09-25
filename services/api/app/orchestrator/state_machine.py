@@ -14,39 +14,47 @@ VALID_TRANSITIONS: dict[InvestigationState, set[InvestigationState]] = {
     InvestigationState.INCIDENT_DETECTED: {
         InvestigationState.SCOPING,
         InvestigationState.FAILED,
+        InvestigationState.INTERRUPTED,
     },
     InvestigationState.SCOPING: {
         InvestigationState.TIMELINE_BUILT,
         InvestigationState.FAILED,
+        InvestigationState.INTERRUPTED,
     },
     InvestigationState.TIMELINE_BUILT: {
         InvestigationState.EVIDENCE_RETRIEVED,
         InvestigationState.FAILED,
+        InvestigationState.INTERRUPTED,
     },
     InvestigationState.EVIDENCE_RETRIEVED: {
         InvestigationState.HYPOTHESES_GENERATED,
         InvestigationState.INCONCLUSIVE,
         InvestigationState.FAILED,
+        InvestigationState.INTERRUPTED,
     },
     InvestigationState.HYPOTHESES_GENERATED: {
         InvestigationState.HYPOTHESES_RANKED,
         InvestigationState.INCONCLUSIVE,
         InvestigationState.FAILED,
+        InvestigationState.INTERRUPTED,
     },
     InvestigationState.HYPOTHESES_RANKED: {
         InvestigationState.INVESTIGATING_HYPOTHESIS,
         InvestigationState.INCONCLUSIVE,
         InvestigationState.FAILED,
+        InvestigationState.INTERRUPTED,
     },
     InvestigationState.INVESTIGATING_HYPOTHESIS: {
         InvestigationState.INVESTIGATING_HYPOTHESIS,  # Transition to next hypothesis in batch
         InvestigationState.RCA_GENERATED,
         InvestigationState.INCONCLUSIVE,
         InvestigationState.FAILED,
+        InvestigationState.INTERRUPTED,
     },
     InvestigationState.RCA_GENERATED: set(),   # Terminal state
     InvestigationState.INCONCLUSIVE: set(),     # Terminal state
     InvestigationState.FAILED: set(),           # Terminal state
+    InvestigationState.INTERRUPTED: set(),      # Terminal state
 }
 
 
@@ -76,6 +84,7 @@ class InvestigationStateMachine:
             InvestigationState.RCA_GENERATED,
             InvestigationState.INCONCLUSIVE,
             InvestigationState.FAILED,
+            InvestigationState.INTERRUPTED,
         }
 
     def record_initial_step(

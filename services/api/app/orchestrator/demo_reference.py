@@ -1,6 +1,9 @@
-"""Pre-computed golden reference investigation cache and progressive replay for the Demo Incident.
+"""Pre-computed reference investigation cache and progressive replay for the Demo Incident.
 
-Guarantees 100% reliable, zero-quota demo evaluations on "Run Demo Incident" regardless
+Replays a pre-computed reference investigation (generated via MockLLMProvider for bad_deployment_db_exhaustion, seed=1)
+step-by-step with synthetic telemetry stored in the database and available for inspection.
+
+Guarantees 100% reliable, zero-quota demo evaluations on "Run Demo Replay" regardless
 of external Gemini API rate limits or daily quotas.
 """
 
@@ -25,13 +28,15 @@ from app.schemas.investigations import Investigation, InvestigationState, Invest
 
 logger = logging.getLogger("trace.orchestrator.demo_reference")
 
-# Static reference incident specification
+# Explicit demo reference version to ensure cache freshness without log searching
+DEMO_REFERENCE_VERSION = "v3"
+
 DEMO_SPEC = BenchmarkIncidentSpec(
-    benchmark_id="demo-reference-golden",
+    benchmark_id=f"demo-reference-golden-{DEMO_REFERENCE_VERSION}",
     incident_type=IncidentType.BAD_DEPLOYMENT_DB_EXHAUSTION.value,
     seed=1,
     duration_minutes=15,
-    description="TRACE Golden Demo Scenario: Bad deployment to checkout-service causing DB connection pool exhaustion",
+    description=f"TRACE Golden Demo Scenario ({DEMO_REFERENCE_VERSION}): Bad deployment to checkout-service causing DB connection pool exhaustion",
 )
 
 _cached_reference_investigation: Investigation | None = None
@@ -58,7 +63,7 @@ async def ensure_demo_incident_and_evidence(session: AsyncSession) -> UUID:
     if not existing:
         embedder = get_embedding_provider()
         await ingest_incident_evidence(session, incident, bundle, provider=embedder)
-        logger.info(f"Ingested golden demo evidence for incident {incident.incident_id}")
+        logger.info(f"Ingested golden demo evidence for incident {incident.incident_id} (version={DEMO_REFERENCE_VERSION})")
 
     return incident.incident_id
 
@@ -72,10 +77,10 @@ async def get_or_generate_demo_reference(
 
     incident_id = await ensure_demo_incident_and_evidence(session)
 
-    if _cached_reference_investigation and not force_refresh:
+    if _cached_reference_investigation and not force_refresh and _cached_reference_incident_id == incident_id:
         return incident_id, _cached_reference_investigation
 
-    # Check if a completed golden investigation already exists in the database
+    # Check if a completed golden investigation already exists in the database for this specific versioned incident
     inv_stmt = (
         select(InvestigationORM)
         .where(
@@ -93,31 +98,33 @@ async def get_or_generate_demo_reference(
             .order_by(InvestigationStepORM.step_number.asc())
         )
         steps_orm = (await session.execute(steps_stmt)).scalars().all()
-        steps = [
-            InvestigationStep(
-                step_number=s.step_number,
-                state=InvestigationState(s.state),
-                summary=s.summary,
-                details=s.details or {},
-                timestamp=s.timestamp,
+
+        if steps_orm:
+            steps = [
+                InvestigationStep(
+                    step_number=s.step_number,
+                    state=InvestigationState(s.state),
+                    summary=s.summary,
+                    details=s.details or {},
+                    timestamp=s.timestamp,
+                )
+                for s in steps_orm
+            ]
+            _cached_reference_investigation = Investigation(
+                investigation_id=existing_inv.investigation_id,
+                incident_id=existing_inv.incident_id,
+                steps=steps,
+                final_state=InvestigationState(existing_inv.final_state),
+                leading_hypothesis_id=existing_inv.leading_hypothesis_id,
+                confidence=existing_inv.confidence or 100.0,
+                started_at=existing_inv.started_at,
+                completed_at=existing_inv.completed_at,
+                rca_narrative=existing_inv.rca_narrative,
             )
-            for s in steps_orm
-        ]
-        _cached_reference_investigation = Investigation(
-            investigation_id=existing_inv.investigation_id,
-            incident_id=existing_inv.incident_id,
-            steps=steps,
-            final_state=InvestigationState(existing_inv.final_state),
-            leading_hypothesis_id=existing_inv.leading_hypothesis_id,
-            confidence=existing_inv.confidence or 100.0,
-            started_at=existing_inv.started_at,
-            completed_at=existing_inv.completed_at,
-            rca_narrative=existing_inv.rca_narrative,
-        )
-        return incident_id, _cached_reference_investigation
+            return incident_id, _cached_reference_investigation
 
     # Generate fresh golden reference investigation using MockLLMProvider for deterministic 100% confidence
-    logger.info("Generating reference demo investigation...")
+    logger.info(f"Generating fresh reference demo investigation (version={DEMO_REFERENCE_VERSION})...")
     ref_inv = await run_investigation(
         incident_id=incident_id,
         session=session,
@@ -137,7 +144,7 @@ async def replay_demo_investigation(
     investigation_cache: dict[UUID, Any],
     step_delay_seconds: float = 0.75,
 ) -> None:
-    """Progressively replays the golden investigation steps to simulate real-time autonomous analysis."""
+    """Progressively replays the verified reference investigation steps with stored synthetic telemetry."""
     from app.api.investigations import InvestigationPublic, InvestigationStepPublic
 
     try:
@@ -196,15 +203,25 @@ async def replay_demo_investigation(
 
     except Exception as ex:
         logger.exception(f"Error during demo investigation replay: {ex}")
+        now = datetime.now(timezone.utc)
+        async with session_factory() as session:
+            inv_stmt = select(InvestigationORM).where(InvestigationORM.investigation_id == target_investigation_id)
+            inv_orm = (await session.execute(inv_stmt)).scalar_one_or_none()
+            if inv_orm and inv_orm.final_state == "running":
+                inv_orm.final_state = "failed"
+                inv_orm.completed_at = now
+                inv_orm.rca_narrative = f"Demo replay encountered an unexpected error: {ex}"
+                await session.commit()
+
         if target_investigation_id in investigation_cache:
             cached = investigation_cache[target_investigation_id]
             investigation_cache[target_investigation_id] = InvestigationPublic(
                 investigation_id=target_investigation_id,
                 incident_id=incident_id,
-                final_state="inconclusive",
+                final_state="failed",
                 confidence=0.0,
-                rca_narrative=f"Demo replay encountered an error: {ex}",
+                rca_narrative=f"Demo replay encountered an unexpected error: {ex}",
                 started_at=cached.started_at,
-                completed_at=datetime.now(timezone.utc),
+                completed_at=now,
                 steps=cached.steps,
             )

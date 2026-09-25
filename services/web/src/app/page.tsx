@@ -23,13 +23,64 @@ export default function Home() {
   const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'live' | 'rca'>('live');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isDemoReplay, setIsDemoReplay] = useState<boolean>(false);
 
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Load incidents on mount
+  // Helper to update the browser URL search query without full navigation
+  const updateUrlParam = (invId: string | null) => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    if (invId) {
+      url.searchParams.set('investigationId', invId);
+    } else {
+      url.searchParams.delete('investigationId');
+    }
+    window.history.replaceState({}, '', url.toString());
+  };
+
+  // Check URL search parameters on initial mount for shareable investigation link or refresh
   useEffect(() => {
     loadIncidents();
+
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const urlInvId = params.get('investigationId');
+      if (urlInvId) {
+        restoreInvestigationFromUrl(urlInvId);
+      }
+    }
   }, []);
+
+  const restoreInvestigationFromUrl = async (invId: string) => {
+    setErrorMessage(null);
+    try {
+      const inv = await fetchInvestigation(invId);
+      setInvestigation(inv);
+      setActiveInvestigationId(inv.investigation_id);
+      setIsDemoReplay(inv.run_mode === 'demo_replay');
+      setActiveTab(inv.final_state === 'rca_generated' || inv.final_state === 'inconclusive' ? 'rca' : 'live');
+
+      // Fetch accompanying hypotheses and timeline
+      const [hyps, tl] = await Promise.all([
+        fetchInvestigationHypotheses(invId).catch(() => []),
+        fetchInvestigationTimeline(invId).catch(() => null),
+      ]);
+      setHypotheses(hyps);
+      if (tl) setTimeline(tl);
+    } catch (err: any) {
+      console.error('Failed to restore investigation from URL ID', err);
+      updateUrlParam(null);
+      setActiveInvestigationId(null);
+      setInvestigation(null);
+      setErrorMessage(
+        extractErrorMessage(
+          err,
+          `Investigation "${invId}" was not found or has expired. You have been returned to the Incident Launcher.`
+        )
+      );
+    }
+  };
 
   const loadIncidents = async () => {
     setLoadingIncidents(true);
@@ -46,11 +97,13 @@ export default function Home() {
   };
 
   // Set active investigation directly
-  const handleInvestigationStarted = (inv: Investigation) => {
+  const handleInvestigationStarted = (inv: Investigation, isDemo: boolean = false) => {
     setActiveInvestigationId(inv.investigation_id);
     setInvestigation(inv);
+    setIsDemoReplay(inv.run_mode === 'demo_replay' || isDemo);
     setActiveTab('live');
     setErrorMessage(null);
+    updateUrlParam(inv.investigation_id);
   };
 
   // Start an investigation for an existing incident
@@ -58,7 +111,7 @@ export default function Home() {
     setErrorMessage(null);
     try {
       const inv = await startInvestigation(incidentId);
-      handleInvestigationStarted(inv);
+      handleInvestigationStarted(inv, false);
     } catch (err: any) {
       console.error('Failed to start investigation', err);
       setErrorMessage(extractErrorMessage(err, 'Failed to initiate autonomous investigation.'));
@@ -75,6 +128,9 @@ export default function Home() {
       try {
         const inv = await fetchInvestigation(activeInvestigationId);
         setInvestigation(inv);
+        if (inv.run_mode) {
+          setIsDemoReplay(inv.run_mode === 'demo_replay');
+        }
         consecutiveErrors = 0;
 
         // Fetch hypotheses & timeline
@@ -176,9 +232,12 @@ export default function Home() {
               <Screen3FinalRCA
                 investigation={investigation}
                 hypotheses={hypotheses}
+                isDemoReplay={isDemoReplay}
                 onBackToLauncher={() => {
+                  updateUrlParam(null);
                   setActiveInvestigationId(null);
                   setInvestigation(null);
+                  setIsDemoReplay(false);
                   loadIncidents();
                 }}
                 onOpenEvidence={(id) => setSelectedEvidenceId(id)}
@@ -188,9 +247,12 @@ export default function Home() {
                 investigation={investigation}
                 hypotheses={hypotheses}
                 timeline={timeline}
+                isDemoReplay={isDemoReplay}
                 onBackToLauncher={() => {
+                  updateUrlParam(null);
                   setActiveInvestigationId(null);
                   setInvestigation(null);
+                  setIsDemoReplay(false);
                   loadIncidents();
                 }}
                 onOpenEvidence={(id) => setSelectedEvidenceId(id)}

@@ -103,13 +103,22 @@ async def run_investigation(
         await session.commit()
         return inv
 
+    provider_name = getattr(provider, "provider_name", "mock")
+    model_name = getattr(provider, "model_name", "Mock Provider (Offline Deterministic Rules)")
+    is_fallback = getattr(provider, "is_fallback", False)
+    fallback_reason = getattr(provider, "fallback_reason", None) or ""
+
     step_init = sm.record_initial_step(
-        summary=f"Incident detected: {incident_orm.incident_type} (severity={incident_orm.severity})",
+        summary=f"Incident detected: {incident_orm.incident_type} (severity={incident_orm.severity}) [Provider: {model_name}]",
         details={
             "incident_id": str(incident_id),
             "incident_type": incident_orm.incident_type,
             "severity": incident_orm.severity,
             "start_time": incident_orm.start_time.isoformat(),
+            "llm_provider": provider_name,
+            "llm_model": model_name,
+            "is_fallback": is_fallback,
+            "fallback_reason": fallback_reason,
         },
         timestamp=started_at,
     )
@@ -226,6 +235,21 @@ async def run_investigation(
     for s in affected_services:
         entity_events_by_service[s] = await get_events_for_entity(session, incident_id, s, limit=10)
 
+    def is_relevant_supporting_event(e: NormalizedEvent) -> bool:
+        """Deterministic rule: Primary causal evidence must reflect an anomaly, error, warning, alert, or change event."""
+        if e.severity in [EventSeverity.ERROR, EventSeverity.CRITICAL, EventSeverity.WARNING]:
+            return True
+        if e.source in [EventSource.DEPLOYMENT, EventSource.COMMIT, EventSource.ALERT]:
+            return True
+        if e.source == EventSource.DATABASE and e.attributes.get("status") in ["timeout", "error", "slow", "deadlock", "exhausted"]:
+            return True
+        if e.source == EventSource.METRIC and (
+            e.attributes.get("status") in ["anomaly", "spike", "exhausted", "critical"]
+            or float(e.attributes.get("z_score", 0.0)) >= 2.0
+        ):
+            return True
+        return False
+
     supporting_events_map: dict[UUID, list[NormalizedEvent]] = {}
     symptoms_explained_map: dict[UUID, list[str]] = {}
     for h in candidates:
@@ -233,15 +257,22 @@ async def run_investigation(
         if "payment" in title_lower:
             err_evts = [
                 e for e in entity_events_by_service.get("payment-service", [])
-                if e.severity in [EventSeverity.ERROR, EventSeverity.WARNING]
+                if is_relevant_supporting_event(e)
             ]
-            supporting_events_map[h.id] = err_evts if err_evts else entity_events_by_service.get("payment-service", [])[:6]
+            supporting_events_map[h.id] = err_evts[:6]
             symptoms_explained_map[h.id] = list(expected_symptoms)
         elif "checkout" in title_lower:
-            supporting_events_map[h.id] = entity_events_by_service.get("checkout-service", [])[:6]
+            err_evts = [
+                e for e in entity_events_by_service.get("checkout-service", [])
+                if is_relevant_supporting_event(e)
+            ]
+            supporting_events_map[h.id] = err_evts[:6]
             symptoms_explained_map[h.id] = list(expected_symptoms)
         elif "database" in title_lower:
-            supporting_events_map[h.id] = [e for e in entity_events_by_service.get("checkout-service", []) if e.source == EventSource.DATABASE][:3]
+            supporting_events_map[h.id] = [
+                e for e in entity_events_by_service.get("checkout-service", [])
+                if is_relevant_supporting_event(e) and e.source == EventSource.DATABASE
+            ][:3]
             symptoms_explained_map[h.id] = ["checkout_db connection pool saturation (100/100 active connections)"]
         else:
             supporting_events_map[h.id] = []
@@ -521,6 +552,10 @@ async def run_investigation(
         started_at=started_at,
         completed_at=completed_at,
         rca_narrative=rca_narrative_text,
+        llm_provider=provider_name,
+        llm_model=model_name,
+        is_fallback=is_fallback,
+        fallback_reason=fallback_reason,
     )
 
     existing_inv_orm = (await session.execute(
@@ -533,6 +568,10 @@ async def run_investigation(
         existing_inv_orm.confidence = confidence_val
         existing_inv_orm.completed_at = completed_at
         existing_inv_orm.rca_narrative = rca_narrative_text
+        existing_inv_orm.llm_provider = provider_name
+        existing_inv_orm.llm_model = model_name
+        existing_inv_orm.is_fallback = is_fallback
+        existing_inv_orm.fallback_reason = fallback_reason
     else:
         session.add(investigation_to_orm(investigation))
     await session.commit()

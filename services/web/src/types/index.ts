@@ -26,6 +26,11 @@ export interface Investigation {
   started_at: string;
   completed_at?: string | null;
   steps: InvestigationStep[];
+  run_mode?: 'demo_replay' | 'autonomous_live' | string;
+  llm_provider?: 'gemini' | 'mock' | string;
+  llm_model?: string;
+  is_fallback?: boolean;
+  fallback_reason?: string | null;
 }
 
 export interface EvidenceRefData {

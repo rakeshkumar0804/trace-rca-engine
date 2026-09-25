@@ -14,9 +14,13 @@ from app.db.base import Base, reset_engine
 from app.main import app
 
 
+from app.api.rate_limiter import RateLimitMiddleware
+
+
 @pytest.fixture
 async def client():
     """Provides async test client with initialized in-memory SQLite database."""
+    RateLimitMiddleware.reset_all_instances()
     engine = await reset_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -24,6 +28,7 @@ async def client():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+    RateLimitMiddleware.reset_all_instances()
 
 
 class TestIncidentsAPI:
@@ -204,4 +209,81 @@ class TestErrorFormattingAndDemoReplay:
         poll_data = poll_res.json()
         assert poll_data["investigation_id"] == inv_id
         assert "ground_truth" not in poll_data
+
+    @pytest.mark.anyio
+    async def test_demo_replay_transparency_and_evidence_resolvability(self, client: AsyncClient):
+        """Verifies that demo replay produces inspectable evidence records in the database."""
+        import asyncio
+
+        demo_res = await client.post("/api/investigations/demo")
+        assert demo_res.status_code == 200
+        inv_data = demo_res.json()
+        inv_id = inv_data["investigation_id"]
+
+        # Wait for replay worker to emit all steps
+        for _ in range(15):
+            await asyncio.sleep(0.6)
+            poll_res = await client.get(f"/api/investigations/{inv_id}")
+            poll_data = poll_res.json()
+            if poll_data["final_state"] == "rca_generated":
+                break
+
+        assert poll_data["final_state"] == "rca_generated"
+        assert poll_data["confidence"] == 100.0
+        assert len(poll_data["steps"]) == 8
+        assert "Bad Deployment" in poll_data["rca_narrative"]
+
+    @pytest.mark.anyio
+    async def test_demo_replay_endpoint_distinct_from_live_run(self, client: AsyncClient):
+        """Verifies that the demo replay endpoint operates independently from custom incident runs."""
+        # 1. Start demo replay
+        demo_res = await client.post("/api/investigations/demo")
+        assert demo_res.status_code == 200
+        demo_data = demo_res.json()
+        assert "investigation_id" in demo_data
+        assert demo_data["final_state"] == "running"
+
+        # 2. Custom live incident run with different seed/type
+        gen_res = await client.post("/api/incidents/generate", json={"incident_type": "dependency_failure_cascade", "seed": 42})
+        assert gen_res.status_code == 200
+        inc_data = gen_res.json()
+        assert inc_data["incident_type"] == "dependency_failure_cascade"
+        assert inc_data["incident_id"] != demo_data["incident_id"]
+
+    @pytest.mark.anyio
+    async def test_demo_hypotheses_and_evidence_relevance(self, client: AsyncClient):
+        """Verifies candidate categorization and absence of routine operational logs from primary evidence."""
+        import asyncio
+
+        demo_res = await client.post("/api/investigations/demo")
+        assert demo_res.status_code == 200
+        inv_data = demo_res.json()
+        inv_id = inv_data["investigation_id"]
+
+        # Wait for replay worker to emit all steps
+        for _ in range(15):
+            await asyncio.sleep(0.6)
+            poll_res = await client.get(f"/api/investigations/{inv_id}")
+            poll_data = poll_res.json()
+            if poll_data["final_state"] == "rca_generated":
+                break
+
+        # Fetch hypotheses
+        hyp_res = await client.get(f"/api/investigations/{inv_id}/hypotheses")
+        assert hyp_res.status_code == 200
+        hyps = hyp_res.json()
+        assert len(hyps) > 0
+
+        leading = next((h for h in hyps if h["status"] == "confirmed"), None)
+        assert leading is not None
+        assert "Bad deployment to checkout-service" in leading["title"]
+
+        # Confirm that routine operational logs (like reservation confirmed) are not in primary supporting evidence
+        for ref in leading.get("supporting_evidence", []):
+            note = ref.get("relevance_note", "").lower()
+            assert "reservation confirmed" not in note
+            assert "inventory reservation" not in note
+
+
+
 

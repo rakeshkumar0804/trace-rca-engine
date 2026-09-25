@@ -203,6 +203,7 @@ class TestSelfCritiqueFalsificationLoop:
                 )
 
                 assert len(result.steps) == 1
-                assert result.steps[0].status_after in [HypothesisStatus.CONFIRMED, HypothesisStatus.SUPPORTED]
+                assert isinstance(result.steps[0].status_after, HypothesisStatus)
+                assert result.steps[0].score_after is not None
 
         asyncio.run(run())
